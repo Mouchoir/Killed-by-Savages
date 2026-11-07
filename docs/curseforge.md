@@ -1,0 +1,69 @@
+# CurseForge project page
+
+The texts of the CurseForge project, kept here so the page and the repo say
+the same thing. Game: World of Warcraft, game version 1.60.1 (Forever,
+interface 16001). Category: PvP. License: GNU General Public License
+version 3.0. Source: https://github.com/Mouchoir/Killed-by-Savages.
+
+## Name
+
+Killed by Savages
+
+## Summary
+
+Guild kill board for WoW: Forever: who killed how many enemies, per player,
+per character and for the whole guild, in the world and in battlegrounds.
+
+## Description
+
+**Killed by Savages** is a guild kill board for World of Warcraft: Forever.
+It counts the enemies each member kills and shows them by player (all
+characters of one account together), by character and for the whole guild,
+in the open world and in battlegrounds, over the current week, the last
+week or all time. Built for the guild Savages; it works for any guild, on
+either faction.
+
+**The board** (`/kbs`, or the minimap button): the players ranking, the
+characters ranking, the guild tab with the enemies killed, the next
+milestone and the latest kills and deaths, the hunting board with the
+enemies the guild kills the most and those who kill it, and a Me tab with
+your own characters and boards. Every member running the addon shares its
+journal with the guild, so everyone sees the same board, including the
+records of members who are offline.
+
+**How it counts.** Kills are the honorable kills the server grants, so an
+assist counts like a killing blow, as in the game; the addon names the
+victim a few seconds later from the killing blow of you, your pet or your
+group, or from the enemy who died next to you. Killing blows and assists are
+shown apart. Deaths come from the death recap, with the killer and the
+spell. In a battleground the enemies are secret, so the final scoreboard is
+kept instead, with every guild teammate on it, credited with or without the
+addon. The guild total counts each enemy death once, whoever took part.
+Players are the characters of one Battle.net account still in the guild,
+grouped by a salted hash of the BattleTag; the tag itself is never kept or
+sent.
+
+**What leaves your client.** Only hidden addon messages to your own guild,
+never chat text, never anything outside the game: your kill and death
+records, your battleground scoreboards and your profile (name, class, race,
+realm, level, the BattleTag hash, your display name). There is no server.
+
+**Commands.** `/kbs` opens the board, `/kbs status` says where the addon
+stands on this character, `/kbs options` opens the options (minimap
+button, chat announcements of guild kills, window scale), `/kbs debug`
+prints the sync state and errors for a bug report.
+
+Source, issues and the test harness: https://github.com/Mouchoir/Killed-by-Savages
+
+---
+
+**Killed by Savages** est un tableau de chasse de guilde pour World of
+Warcraft: Forever : les ennemis tués par chaque membre, par joueur (tous
+ses personnages réunis), par personnage et pour toute la guilde, en monde
+ouvert et en champ de bataille, sur la semaine, la semaine passée ou depuis
+toujours. Conçu pour la guilde Savages, il marche pour n'importe quelle
+guilde, dans les deux factions. Un kill est une victoire honorable accordée
+par le serveur, avec la victime nommée quand le client le permet ; les morts
+viennent du récapitulatif de mort ; en champ de bataille c'est le tableau de
+score final qui compte, pour tous les coéquipiers de guilde. Rien ne sort du
+jeu : les données circulent entre membres par messages d'addon cachés.

@@ -89,11 +89,25 @@ tooltips and `/kbs status` shrinks by the kills placed in the world and the
 HKs of the matches placed. Put the probe folder back, keep its
 SavedVariables, log in: the backfill runs on its own.
 
+## What leaves your client
+
+Only hidden addon messages to your own guild (the guild channel and whispers
+to guild members), never chat text, and never anything outside the game:
+your kill and death records (time, the victim's or killer's name, class,
+race and level, the map position, your lifetime honorable kill count), the
+scoreboard rows of your battlegrounds, and your profile (character name,
+class, race, realm, level, the salted BattleTag hash, your display name, the
+addon version). There is no server; the guild's members hold the data.
+
 ## Install
 
-Unzip `KilledBySavages-<version>.zip` into `World of Warcraft\_forever_\Interface\AddOns`
-and restart the game. Interface 16001 (Forever). Embedded libraries: LibStub,
-CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0, LibDeflate.
+From CurseForge (Killed by Savages, for World of Warcraft: Forever) or the
+zip of the latest GitHub release: unzip `KilledBySavages-<version>.zip` into
+`World of Warcraft\_forever_\Interface\AddOns` and restart the game.
+Interface 16001 (Forever). Embedded libraries: LibStub, CallbackHandler-1.0,
+LibDataBroker-1.1, LibDBIcon-1.0, LibDeflate. Members should run the same
+version: a client keeps records of a kind it does not know, but only shows
+the kinds it knows.
 
 ## Development
 
