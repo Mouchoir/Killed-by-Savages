@@ -1,27 +1,51 @@
 # Killed by Savages
 
-A guild addon for World of Warcraft: Forever, in design. It will count Horde
-players killed by each member (all alts together), by each character and by the
-whole guild, split between battlegrounds and world PvP, with leaderboards, a
-kill feed, guild milestones, a hunting board, officer bounties and a heatmap.
+A guild kill board for World of Warcraft: Forever. It counts the enemies each
+member kills, by player (all characters together), by character and for the
+whole guild, in the open world and in battlegrounds, and shows leaderboards,
+the latest kills and deaths, the enemies the guild kills the most and those
+who kill it. Every member running the addon shares its journal with the
+guild, so everyone sees the same board.
 
-On Forever the combat log is closed to addons, so the design rests on the few
-signals the client still gives: `PARTY_KILL`, the honor line, the server HK
-counters, the end-of-match scoreboard, the death recap. Before writing the
-addon, the probe in this repo measures what those signals really give in game.
+Built for the guild Savages; it works for any guild, on either faction: the
+enemy is the opposite faction of whoever runs it.
 
-## The addon (KilledBySavages)
+## How it counts
 
-`addon/KilledBySavages` is the addon itself, in development. Planned for the
-first version: each honorable kill of a member recorded with its victim
-(killing blow or assist), the PvP deaths with their killer, the kills made in
-battlegrounds, a guild-wide sync over hidden addon messages so every member
-ends up with the whole history, and a window with leaderboards by player (all
-characters together) and by character, the guild total, a kill feed, a hunting
-board and personal stats.
+On Forever the combat log is closed to addons and many values are secret.
+The addon rests on what the client still gives, measured with a probe before
+it was written (see `probe/`):
 
-Current state: the skeleton loads (`/kbs status`, `/kbs debug`); detection,
-sync, stats and the window follow.
+- **Kills** are the honorable kills the server grants (`PLAYER_PVP_KILLS_CHANGED`
+  and the lifetime counter), so an assist counts like a killing blow, as in
+  the game. A few seconds after each one the addon names the victim: a
+  killing blow by you, your pet or your group (`PARTY_KILL`), or else the enemy
+  player who died next to you at that moment (`UNIT_DIED`). Killing blows and
+  assists are shown apart.
+- **Deaths** come from the death recap, which names the killer (player or pet)
+  and the spell. Deaths to creatures are not recorded.
+- **Battlegrounds**: enemies are secret inside, so each HK is recorded live
+  with its time and subzone only. When the match ends the scoreboard becomes
+  readable and is kept as a match record: your row, and the row of every
+  guild teammate on the board, credited with or without the addon. The
+  "enemies killed" of a battleground are the guild's killing blows on that
+  board.
+- **The guild total** counts each enemy death once, whoever took part.
+- **Players** are the characters of one Battle.net account that are still in
+  the guild, grouped by a salted hash of the BattleTag; the tag itself is
+  never kept or sent. A character that leaves the guild drops out of its
+  player's total; the guild keeps what it did.
+- Periods are weeks aligned on the server's weekly reset, plus all time.
+
+Each character keeps an append-only journal of its records, chained by the
+server's lifetime count, and broadcasts new ones to the guild. History moves
+between members by whisper, page by page, deflated, from whoever holds it,
+so a member who logs in later still ends up with everything, including the
+journals of members who are offline. Records of a character are accepted
+live only from that character; pages from a third party must pass validation
+and the chain, and are dropped if the author's own count contradicts them.
+
+## Commands
 
 | Command | What it does |
 |---|---|
@@ -30,66 +54,43 @@ sync, stats and the window follow.
 | `/kbs options` | Open the options |
 | `/kbs debug` | Errors and sync state, for bug reports |
 
-Embedded libraries, copied from versions already running on this client:
-LibStub, CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0, LibDeflate.
+Options: minimap button, chat announcements of guild kills, window scale. The
+display name of a player is set in the Me tab.
 
-## The probe (KBSProbe)
+## Install
 
-`probe/KBSProbe` is a throwaway dev addon. It records, per context (world,
-battleground):
-
-- every `PARTY_KILL`: who landed the blow (me, my pet, party, raid same or other
-  subgroup, outside the group) and the victim, or whether it was secret;
-- every honor line, matched against the client's own honor sentences, so the
-  victim name comes out in any client language;
-- the server HK counters, including how many HKs a battleground gave once we
-  leave it;
-- each HK, matched with what was seen around it: a killing blow by the group,
-  or else an enemy player who died near us (an assist, victim named); and
-  whether the group's killing blows gave us the HK. A log written by an older
-  version is matched once at login;
-- the battleground scoreboard, during the match and at the end, flagging
-  guildmates (with or without the probe);
-- the death recap, our map position, the guild roster and name formats;
-- whether hidden addon messages go through (pings on GUILD, INSTANCE_CHAT,
-  PARTY or RAID);
-- whether the BattleTag is readable, to group alts. Only a salted hash of it is
-  kept or sent, never the tag itself.
-
-It is silent: it prints nothing unless a slash command asks for it.
-`/kbsp verbose` turns on first-sighting messages for the developer.
-
-Each probe shares a compact report (counters and a few format samples) with the
-other probes of the guild over a hidden addon channel (prefix `KBSProbe`). A
-probe that logs in says which reports it holds, and whoever has a newer one
-relays it, so one SavedVariables file ends up holding every probe's report.
-
-Commands:
-
-| Command | What it does |
-|---|---|
-| `/kbsp` | Summary of what the probe saw |
-| `/kbsp verbose` | Tell me when something is seen for the first time |
-| `/kbsp mark <text>` | Leave a note in the log and print your last killing blow, like `/kbsp mark dot` after letting a DoT finish a mob |
-| `/kbsp inspect` | Read the honor (lifetime HK) of the target, a guildmate close by |
-| `/kbsp share` | Send this report to the other probes now |
-| `/kbsp reports` | List the reports received from other probes |
-| `/kbsp export` | Open the report in a window to copy from |
-| `/kbsp reset` | Forget everything recorded on this account |
-
-The data is in `WTF\Account\<ACCOUNT>\SavedVariables\KBSProbe.lua`, written by
-the game on `/reload` or logout.
+Unzip `KilledBySavages-<version>.zip` into `World of Warcraft\_forever_\Interface\AddOns`
+and restart the game. Interface 16001 (Forever). Embedded libraries: LibStub,
+CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0, LibDeflate.
 
 ## Development
 
-- Deploy: `scripts\dev.ps1` (or `dev.cmd`). Targets come from `-WowAddOnsPath`,
-  the `KBS_WOW_ADDONS_PATH` variable, or a gitignored `scripts\dev.local.ps1`
-  setting `$WowAddOnsPaths`. A new addon needs a full game restart.
-- Package the probe for volunteers: `scripts\package-probe.ps1`, which writes
-  `dist\KBSProbe-<version>.zip`.
 - Lint: `luacheck .`
-- Tests: `luajit tests/harness.lua`. Fake Forever clients load the real probe,
-  a fake guild channel links them, and secret values are an object that fails
-  on any read.
-- Read results: `luajit tools/probe_report.lua <path to KBSProbe.lua>` prints a
-  Markdown table, one column per probe.
+- Tests: `luajit tests/addon_harness.lua` and `luajit tests/harness.lua`
+  (the probe). Fake Forever clients in `tests/forever_mock.lua` load the real
+  files, a fake guild channel links them (GUILD, WHISPER, lockdown, throttle),
+  secret values are an object that fails on any read, and every SavedVariables
+  write goes through a serializer that refuses what the game could not save.
+- Deploy to the game: `scripts\dev.ps1 -Addon KilledBySavages` (or `dev.cmd`).
+  Targets come from `-WowAddOnsPath`, the `KBS_WOW_ADDONS_PATH` variable, or
+  a gitignored `scripts\dev.local.ps1` setting `$WowAddOnsPaths`. A new addon
+  needs a full game restart; updates only need `/reload`.
+- Package: `scripts\package-addon.ps1` writes `dist\KilledBySavages-<version>.zip`.
+  A GitHub release triggers `.github/workflows/publish-curseforge.yml` once
+  the CurseForge project id is set in it and the `CURSEFORGE_API_TOKEN`
+  secret exists.
+
+## The probe (KBSProbe)
+
+`probe/KBSProbe` is the throwaway dev addon that measured what the client
+gives before the addon was written. It records, per context (world,
+battleground): every `PARTY_KILL` and who landed it, the honor lines, the
+server HK counters, the battleground scoreboard during and after the match,
+the death recap, the map position, name formats, whether hidden addon
+messages go through, and each HK matched with what was seen around it. It
+is silent unless `/kbsp` asks, shares compact reports with the other probes
+of the guild, and relays them for offline ones.
+
+- Package: `scripts\package-probe.ps1` -> `dist\KBSProbe-<version>.zip`.
+- Read results: `luajit tools/probe_report.lua <path to KBSProbe.lua>` prints
+  a Markdown table, one column per probe.

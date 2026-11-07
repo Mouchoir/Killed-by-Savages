@@ -74,13 +74,13 @@ A.login()
 advance(10)
 local Records = A.ns.Records
 local kill = {
-	type = "K", seq = 7, t = 1794009143, bucket = "w", how = "kb", vtail = "6938-001DF7A9", vname = "Rikkoshet Greyjoy",
+	type = "K", seq = 7, t = 1794009143, bucket = "w", how = "kb", vtail = "6938-00ABCDEF", vname = "Grol Ashtusk",
 	vclass = "WARRIOR", vrace = "Orc", vlevel = 16, mapID = 52, x = 0.4321, y = 0.6789, guild = "Savages", lifeHK = 12,
 }
 local text = Records.Encode(kill)
-check("a kill encodes to one line", text == "K1;7;1794009143;w;kb;6938-001DF7A9;Rikkoshet Greyjoy;WARRIOR;Orc;16;52;0.4321;0.6789;Savages;12;", text)
+check("a kill encodes to one line", text == "K1;7;1794009143;w;kb;6938-00ABCDEF;Grol Ashtusk;WARRIOR;Orc;16;52;0.4321;0.6789;Savages;12;", text)
 local back = Records.Decode(text)
-check("and decodes back", back.type == "K" and back.seq == 7 and back.vname == "Rikkoshet Greyjoy" and back.x == 0.4321 and back.lifeHK == 12)
+check("and decodes back", back.type == "K" and back.seq == 7 and back.vname == "Grol Ashtusk" and back.x == 0.4321 and back.lifeHK == 12)
 check("decoding is cached", Records.Decode(text) == back)
 check("fields with separators are flattened", Records.Encode({ type = "K", seq = 1, t = 1, bucket = "w", how = "unk",
 	guild = "A;B^C", lifeHK = 1 }):find("A B C", 1, true) ~= nil)

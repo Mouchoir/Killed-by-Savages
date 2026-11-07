@@ -1,0 +1,161 @@
+name: Publish to CurseForge
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to package and upload
+        required: true
+        type: string
+      release_type:
+        description: CurseForge release type
+        required: true
+        default: release
+        type: choice
+        options:
+          - release
+          - beta
+          - alpha
+
+permissions:
+  contents: read
+
+env:
+  ADDON_NAME: KilledBySavages
+  ADDON_SOURCE: addon/KilledBySavages
+  CURSEFORGE_BASE_URL: https://wow.curseforge.com
+  # Set once the CurseForge project exists; the upload step refuses to run without it.
+  CURSEFORGE_PROJECT_ID: ""
+  # WoW Forever only: interface 16001 -> CurseForge game version 1.60.1.
+  PUBLISH_TOCS: KilledBySavages.toc
+
+jobs:
+  publish:
+    name: Upload addon package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          # Write the changelog outside the workspace so the checkout step below
+          # (which cleans the working directory) does not delete it.
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            tag="$(jq -r '.release.tag_name' "$GITHUB_EVENT_PATH")"
+            prerelease="$(jq -r '.release.prerelease' "$GITHUB_EVENT_PATH")"
+            jq -r '.release.body // ""' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/CHANGELOG.md"
+
+            if [[ "$prerelease" == "true" ]]; then
+              release_type="beta"
+            else
+              release_type="release"
+            fi
+          else
+            tag="${{ inputs.tag }}"
+            release_type="${{ inputs.release_type }}"
+            printf 'Manual CurseForge upload for %s\n' "$tag" > "$RUNNER_TEMP/CHANGELOG.md"
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_type=$release_type" >> "$GITHUB_OUTPUT"
+
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+
+      - name: Build addon zip
+        shell: bash
+        run: |
+          rm -rf dist
+          mkdir -p "dist/${ADDON_NAME}"
+          # The addon lives under addon/<name>/; package only that folder so the
+          # zip has a single top-level <name>/ directory as WoW expects.
+          rsync -a \
+            --exclude='.git/' \
+            --exclude='*.zip' \
+            "${ADDON_SOURCE}/" "dist/${ADDON_NAME}/"
+          cd dist
+          zip -r "${ADDON_NAME}-${{ steps.release.outputs.tag }}.zip" "${ADDON_NAME}"
+
+      - name: Prepare CurseForge metadata
+        shell: bash
+        env:
+          CURSEFORGE_API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
+        run: |
+          if [[ -z "$CURSEFORGE_PROJECT_ID" ]]; then
+            echo "CURSEFORGE_PROJECT_ID is not set in the workflow: create the CurseForge project first." >&2
+            exit 1
+          fi
+          if [[ -z "$CURSEFORGE_API_TOKEN" ]]; then
+            echo "Missing CURSEFORGE_API_TOKEN repository secret." >&2
+            exit 1
+          fi
+
+          versions_json="$(curl -sf \
+            --header "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
+            "${CURSEFORGE_BASE_URL}/api/game/versions")"
+
+          # Resolve a CurseForge game-version id per published TOC. The version
+          # comes from the TOC Interface number (16001 -> 1.60.1). Pinning to
+          # explicit ids avoids the spurious duplicates CurseForge otherwise
+          # infers from the TOC alone.
+          ids=()
+          for toc_name in ${PUBLISH_TOCS}; do
+            toc="${ADDON_SOURCE}/${toc_name}"
+            if [[ ! -f "$toc" ]]; then
+              echo "TOC listed in PUBLISH_TOCS not found: $toc" >&2
+              exit 1
+            fi
+            iface="$(grep -iE '^## Interface:' "$toc" | grep -oE '[0-9]+' | head -1)"
+            if [[ -z "$iface" ]]; then
+              echo "Could not read '## Interface:' from $toc" >&2
+              exit 1
+            fi
+            version_string="$((10#$iface / 10000)).$((10#$iface / 100 % 100)).$((10#$iface % 100))"
+            id="$(jq --arg v "$version_string" \
+              'map(select(.name == $v)) | .[0].id // empty' <<<"$versions_json")"
+            if [[ -z "$id" ]]; then
+              echo "No CurseForge game version matches '$version_string' (from $toc_name). Available:" >&2
+              jq -r '.[].name' <<<"$versions_json" | sort -uV >&2
+              exit 1
+            fi
+            echo "$toc_name: interface $iface -> $version_string -> id $id"
+            ids+=("$id")
+          done
+
+          game_versions="$(printf '%s\n' "${ids[@]}" | sort -un | jq -s '.')"
+
+          jq -n \
+            --rawfile changelog "$RUNNER_TEMP/CHANGELOG.md" \
+            --arg displayName "${{ steps.release.outputs.tag }}" \
+            --arg releaseType "${{ steps.release.outputs.release_type }}" \
+            --argjson gameVersions "$game_versions" \
+            '{
+              changelog: $changelog,
+              changelogType: "markdown",
+              displayName: $displayName,
+              gameVersions: $gameVersions,
+              releaseType: $releaseType
+            }' > metadata.json
+
+          echo "metadata.json:"; jq '.gameVersions, .displayName' metadata.json
+
+      - name: Upload to CurseForge
+        shell: bash
+        env:
+          CURSEFORGE_API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
+        run: |
+          if [[ -z "$CURSEFORGE_API_TOKEN" ]]; then
+            echo "Missing CURSEFORGE_API_TOKEN repository secret." >&2
+            exit 1
+          fi
+
+          curl --fail-with-body \
+            --header "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
+            --form "metadata=<metadata.json;type=application/json" \
+            --form "file=@dist/${ADDON_NAME}-${{ steps.release.outputs.tag }}.zip" \
+            "${CURSEFORGE_BASE_URL}/api/projects/${CURSEFORGE_PROJECT_ID}/upload-file"
