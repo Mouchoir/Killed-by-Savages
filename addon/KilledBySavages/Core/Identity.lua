@@ -151,6 +151,11 @@ function Identity.UpdateRoster(force)
 	return true
 end
 
+-- Whether the roster has been read at least once, with members in it.
+function Identity.RosterKnown()
+	return (roster.count or 0) > 0 and next(roster.byCanon) ~= nil
+end
+
 function Identity.Member(name)
 	local canon = Identity.Canon(name)
 	return canon and roster.byCanon[canon] or nil

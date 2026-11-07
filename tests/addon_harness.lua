@@ -545,15 +545,16 @@ local recoveries = A.counter("sync.recoveryStart")
 local crashMark = #network.sent
 A.crash()
 A.login()
-advance(10)
+advance(1)
 check("the lost session is detected and recovery starts", A.counter("sync.recoveryStart") == recoveries + 1 and A.ns.Records.Holding() == true)
--- A kill during the recovery waits for its number.
+-- A kill during the recovery (before the holders could answer) waits for
+-- its number; the kill becomes a record 3 s later, once matched.
 A.fire("UNIT_DIED", HORDE[4].guid)
 GainHK(A)
-advance(5)
+advance(3.5)
 local _, heldCount = A.ns.Records.Holding()
 check("a kill during the recovery waits unnumbered", heldCount == 1, heldCount)
-advance(120)
+advance(131)
 check("the lost records came back from a holder", Held(A, A) == aHead + 3 and A.counter("sync.recovered") == 1, Held(A, A))
 check("the holders answered on the guild channel and served by whisper", SentSince(crashMark, "GUILD", "A") >= 1
 	and SentSince(crashMark, "GUILD", "B") == 0 and SentSince(crashMark, "WHISPER", "B") >= 1)
@@ -879,7 +880,7 @@ mark = #network.sent
 F.login()
 advance(5)
 local fStatus = F.ns.Sync.Status()
-check("a newcomer is told the sync is coming", fStatus.phase == "waiting" and fStatus.helloIn > 20 and fStatus.helloIn <= 60
+check("a newcomer is told the sync is coming", fStatus.phase == "waiting" and fStatus.helloIn > 2 and fStatus.helloIn <= 15
 	and F.ns.UI.SyncText(fStatus):find("dans %d+ s") ~= nil, fStatus.phase)
 local imported = Journal(F)
 local fChar = F.db().characters[F.guid]

@@ -39,11 +39,13 @@ local SEND_GAP = 1.2              -- seconds between two messages
 local LOCKDOWN_WAIT = 15
 local THROTTLE_WAIT = 3
 local QUEUE_CAP = 400
-local HELLO_DELAY_MIN, HELLO_DELAY_MAX = 30, 60
+local HELLO_DELAY_MIN, HELLO_DELAY_MAX = 8, 15
+local HELLO_READY_WAIT = 5        -- more to wait, at a time, for the guild and its roster to be known
+local HELLO_READY_TRIES = 12      -- a minute of that at most
 local HELLO_MIN_GAP = 600         -- never two hellos within this, per character
 local HELLO_PERIOD = 1200         -- a hello this often when the head moved
-local ADVANCE_MIN, ADVANCE_MAX = 2, 20
-local INVENTORY_WAIT = 15         -- after a hello, how long an inventory may take to follow
+local ADVANCE_MIN, ADVANCE_MAX = 1, 8
+local INVENTORY_WAIT = 8          -- after a hello, how long an inventory may take to follow
 local LIST_BYTES = 230            -- inventory and advance payload per message
 local REQUEST_TIMEOUT = 45        -- before the first chunk of a page
 local CHUNK_TIMEOUT = 1.5         -- per chunk once the total is known
@@ -1034,14 +1036,25 @@ local function OnLogin()
 		Util.Call(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX)
 	end
 	heldAtLogin = HeldOthers()
-	local delay = Jitter(HELLO_DELAY_MIN, HELLO_DELAY_MAX)
-	helloDueAt = Now() + delay
-	Util.After(delay, "hello", function()
+	-- The guild and its roster can take a few seconds to be known after
+	-- login, and the answers to the hello are taken from roster members only.
+	local function TryHello(attempt)
+		if recovery then
+			helloDueAt = nil
+			return
+		end
+		if attempt <= HELLO_READY_TRIES and not (Identity.InGuild() and Identity.RosterKnown()) then
+			helloDueAt = Now() + HELLO_READY_WAIT
+			Util.After(HELLO_READY_WAIT, "hello", TryHello, attempt + 1)
+			return
+		end
 		helloDueAt = nil
-		if recovery then return end
 		Sync.SendHello("login")
 		Sync.SendInventory()
-	end)
+	end
+	local delay = Jitter(HELLO_DELAY_MIN, HELLO_DELAY_MAX)
+	helloDueAt = Now() + delay
+	Util.After(delay, "hello", TryHello, 1)
 	Util.Every(HELLO_PERIOD, "hello-period", function()
 		if OwnHead() ~= lastHeadAnnounced then Sync.SendHello("period") end
 	end)
