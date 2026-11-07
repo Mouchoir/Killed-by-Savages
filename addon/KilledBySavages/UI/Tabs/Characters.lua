@@ -25,7 +25,7 @@ local function Tooltip(row, data)
 	for _, kill in ipairs(Stats.LastKills(data.guid, 5)) do
 		local record = kill.record
 		local victim = record.vname or L.EVENT_UNKNOWN_VICTIM
-		local where = Theme.ZoneName(record.mapID)
+		local where = record.sub or Theme.ZoneName(record.mapID)
 		Theme.TooltipDouble(("%s  %s"):format(EventLabel(record), victim), (where and (where .. "  ") or "") .. Theme.Time(record.t))
 	end
 	Theme.TooltipShow()

@@ -9,11 +9,16 @@ local _, ns = ...
 -- between guild members unchanged, so the format is frozen from v0.1: a
 -- client ignores record types and versions it does not know.
 --
---   K1  kill      seq;t;bucket;how;vtail;vname;vclass;vrace;vlevel;mapID;x;y;guild;lifeHK
---   D1  death     seq;t;bucket;ktail;kname;kclass;krace;kkind;spell;mapID;x;y;lifeHK
---   M1  match     seq;t;mapID;hk;lifeHK              (a battleground, HKs counted on leaving)
+--   K1  kill      seq;t;bucket;how;vtail;vname;vclass;vrace;vlevel;mapID;x;y;guild;lifeHK;sub
+--   D1  death     seq;t;bucket;ktail;kname;kclass;krace;kkind;spell;mapID;x;y;lifeHK;sub
+--   M1  match     seq;t;instanceID;duration;winner;hk;kb;deaths;honor;damage;healing;lifeHK;live;mapID;lines
 --   X1  counter   seq;t;bucket;fromHK;toHK            (HKs the server counted with no detail)
 --   P1  profile   name;class;race;realm;playerKey;alias;level;baselineHK;lifeHK;version
+--
+-- A match record is the end-of-battleground scoreboard: my own row, then
+-- one line per guild teammate on the board (tail:name:kb:hk:deaths:honor,
+-- comma separated), credited to them with or without the addon. live is
+-- how many of the match's HKs were already recorded live as kills.
 --
 -- lifeHK is the character's lifetime honorable kills right after the event:
 -- the server's own count, which chains the records of an author together.
@@ -25,7 +30,8 @@ local Clean = Util.Clean
 local Records = {}
 ns.Records = Records
 
-Records.HOW = { kb = true, pet = true, grp = true, ast = true, unk = true }
+Records.HOW = { kb = true, pet = true, grp = true, ast = true, unk = true, bg = true }
+Records.MAX_LINES = 40
 Records.BUCKET = { w = true, b = true, u = true }
 Records.PAGE = 200
 local MAX_FUTURE = 300
@@ -74,16 +80,42 @@ end
 
 function Records.EncodeKill(r)
 	return Join("K1", r.seq, r.t, r.bucket, r.how, r.vtail, r.vname, r.vclass, r.vrace, r.vlevel,
-		r.mapID, r.x, r.y, r.guild, r.lifeHK)
+		r.mapID, r.x, r.y, r.guild, r.lifeHK, r.sub)
 end
 
 function Records.EncodeDeath(r)
 	return Join("D1", r.seq, r.t, r.bucket, r.ktail, r.kname, r.kclass, r.krace, r.kkind, r.spell,
-		r.mapID, r.x, r.y, r.lifeHK)
+		r.mapID, r.x, r.y, r.lifeHK, r.sub)
+end
+
+-- One scoreboard line: tail:name:kb:hk:deaths:honor. Built from cleaned
+-- parts, outside Field, so its own separators survive.
+local function EncodeLine(line)
+	local name = Clean(line.name or ""):gsub(":", " ")
+	return ("%s:%s:%d:%d:%d:%d"):format(line.tail or "", name, line.kb or 0, line.hk or 0, line.deaths or 0, line.honor or 0)
+end
+
+local function DecodeLines(text)
+	local lines = {}
+	if type(text) ~= "string" or text == "" then return lines end
+	for piece in (text .. ","):gmatch("([^,]*),") do
+		local tail, name, kb, hk, deaths, honor = piece:match("^([^:]*):([^:]*):(%d+):(%d+):(%d+):(%d+)$")
+		if tail then
+			lines[#lines + 1] = { tail = tail ~= "" and tail or nil, name = name ~= "" and name or nil,
+				kb = tonumber(kb), hk = tonumber(hk), deaths = tonumber(deaths), honor = tonumber(honor) }
+		end
+	end
+	return lines
 end
 
 function Records.EncodeMatch(r)
-	return Join("M1", r.seq, r.t, r.mapID, r.hk, r.lifeHK)
+	local lines = {}
+	for index, line in ipairs(r.lines or {}) do
+		if index > Records.MAX_LINES then break end
+		lines[#lines + 1] = EncodeLine(line)
+	end
+	return Join("M1", r.seq, r.t, r.instanceID, r.duration, r.winner, r.hk, r.kb, r.deaths, r.honor, r.damage, r.healing,
+		r.lifeHK, r.live, r.mapID) .. ";" .. table.concat(lines, ",")
 end
 
 function Records.EncodeCounter(r)
@@ -112,16 +144,21 @@ local function DecodeFields(f)
 		return {
 			type = "K", seq = Num(f[2]), t = Num(f[3]), bucket = Str(f[4]), how = Str(f[5]),
 			vtail = Str(f[6]), vname = Str(f[7]), vclass = Str(f[8]), vrace = Str(f[9]), vlevel = Num(f[10]),
-			mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), guild = Str(f[14]), lifeHK = Num(f[15]),
+			mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), guild = Str(f[14]), lifeHK = Num(f[15]), sub = Str(f[16]),
 		}
 	elseif kind == "D1" then
 		return {
 			type = "D", seq = Num(f[2]), t = Num(f[3]), bucket = Str(f[4]),
 			ktail = Str(f[5]), kname = Str(f[6]), kclass = Str(f[7]), krace = Str(f[8]), kkind = Str(f[9]),
-			spell = Str(f[10]), mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), lifeHK = Num(f[14]),
+			spell = Str(f[10]), mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), lifeHK = Num(f[14]), sub = Str(f[15]),
 		}
 	elseif kind == "M1" then
-		return { type = "M", seq = Num(f[2]), t = Num(f[3]), bucket = "b", mapID = Num(f[4]), hk = Num(f[5]), lifeHK = Num(f[6]) }
+		return {
+			type = "M", seq = Num(f[2]), t = Num(f[3]), bucket = "b", instanceID = Num(f[4]), duration = Num(f[5]),
+			winner = Num(f[6]), hk = Num(f[7]) or 0, kb = Num(f[8]) or 0, deaths = Num(f[9]) or 0, honor = Num(f[10]),
+			damage = Num(f[11]), healing = Num(f[12]), lifeHK = Num(f[13]), live = Num(f[14]) or 0, mapID = Num(f[15]),
+			lines = DecodeLines(f[16]),
+		}
 	elseif kind == "X1" then
 		return { type = "X", seq = Num(f[2]), t = Num(f[3]), bucket = Str(f[4]), fromHK = Num(f[5]), toHK = Num(f[6]) }
 	end
@@ -171,7 +208,7 @@ function Records.Validate(r, now)
 		if not Records.BUCKET[r.bucket] or r.bucket == "u" then return false, "bucket" end
 		if not Records.HOW[r.how] then return false, "how" end
 		if r.vtail ~= nil and not IsTail(r.vtail) then return false, "victim" end
-		if r.how ~= "unk" and r.vtail == nil then return false, "victim" end
+		if r.how ~= "unk" and r.how ~= "bg" and r.vtail == nil then return false, "victim" end
 		if r.vclass ~= nil and not IsToken(r.vclass) then return false, "class" end
 		if r.vrace ~= nil and not IsToken(r.vrace) then return false, "race" end
 		if r.vlevel ~= nil and (r.vlevel < 1 or r.vlevel > MAX_LEVEL) then return false, "level" end
@@ -184,7 +221,15 @@ function Records.Validate(r, now)
 		if type(r.lifeHK) ~= "number" or r.lifeHK < 0 then return false, "lifeHK" end
 	elseif r.type == "M" then
 		if type(r.hk) ~= "number" or r.hk < 0 or r.hk > 500 then return false, "hk" end
+		if type(r.kb) ~= "number" or r.kb < 0 or r.kb > 200 then return false, "kb" end
+		if type(r.deaths) ~= "number" or r.deaths < 0 or r.deaths > 200 then return false, "deaths" end
+		if type(r.live) ~= "number" or r.live < 0 or r.live > r.hk then return false, "live" end
 		if type(r.lifeHK) ~= "number" or r.lifeHK < 0 then return false, "lifeHK" end
+		if #(r.lines or {}) > Records.MAX_LINES then return false, "lines" end
+		for _, line in ipairs(r.lines or {}) do
+			if line.tail ~= nil and not IsTail(line.tail) then return false, "lines" end
+			if line.hk > 500 or line.kb > 200 or line.deaths > 200 then return false, "lines" end
+		end
 	elseif r.type == "X" then
 		if not Records.BUCKET[r.bucket] then return false, "bucket" end
 		if type(r.fromHK) ~= "number" or type(r.toHK) ~= "number" or r.toHK <= r.fromHK then return false, "range" end
@@ -194,12 +239,19 @@ function Records.Validate(r, now)
 	return true
 end
 
--- How many HKs a record adds to the author's lifetime count.
+-- How many HKs a record adds to the author's lifetime count. A match adds
+-- only the HKs not already recorded live during it.
 function Records.Gain(r)
 	if r.type == "K" then return 1 end
-	if r.type == "M" then return r.hk or 0 end
+	if r.type == "M" then return math.max(0, (r.hk or 0) - (r.live or 0)) end
 	if r.type == "X" then return r.toHK - r.fromHK end
 	return 0
+end
+
+-- A match is the same for every member who was in it: the instance and
+-- the minute it ended.
+function Records.MatchKey(r)
+	return tostring(r.instanceID or "?") .. ":" .. tostring(math.floor((r.t or 0) / 120))
 end
 
 -- The lifetime count a record leaves behind.

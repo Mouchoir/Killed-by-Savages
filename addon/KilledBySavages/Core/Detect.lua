@@ -34,8 +34,9 @@ local recentKills = {}        -- PARTY_KILL on players, newest last
 local recentDeaths = {}       -- UNIT_DIED on players, newest last
 local lastHK                  -- last readable lifetime count
 local inBattleground = false
-local bgEntry                 -- { lifeHK, mapID, name } while inside a battleground
+local bgEntry                 -- the match we are in: { lifeHK, at, name, instanceID, live, done }
 local started = false
+local SCORE_DELAYS = { 1, 3, 6 }
 
 --------------------------------------------------------------------------------
 -- Reading the counter
@@ -232,16 +233,25 @@ function Detect.OnKillsChanged()
 		ns.Count("detect.counterSecret")
 		return
 	end
-	if inBattleground then
-		-- Counted on leaving, from the counter: the kill events are secret here.
-		lastHK = lifeHK
-		return
-	end
 	local previous = lastHK
 	lastHK = lifeHK
 	Char().lifeHK = lifeHK
 	if previous == nil or lifeHK <= previous then return end
 	local delta = lifeHK - previous
+	if inBattleground then
+		-- The counter is readable in a battleground but every enemy is
+		-- secret: each HK is a kill with no victim, placed by its subzone.
+		-- The scoreboard names the numbers at the end of the match.
+		for index = 1, delta do
+			Records.AppendOwn({
+				type = "K", t = Util.Now(), bucket = "b", how = "bg", guild = Identity.me.guild,
+				lifeHK = lifeHK - delta + index, sub = Get(GetSubZoneText),
+			})
+		end
+		if bgEntry then bgEntry.live = (bgEntry.live or 0) + delta end
+		ns.Count("detect.bgKill", delta)
+		return
+	end
 	local bucket = Bucket()
 	if not bucket then
 		-- In a dungeon or an unknown place: counted, not placed.
@@ -317,7 +327,11 @@ function Detect.Start()
 	Records.OwnProfile()
 	inBattleground = Util.Bucket() == "bg"
 	if inBattleground and not bgEntry then
-		bgEntry = { lifeHK = lifeHK, at = Util.Now() }
+		local instanceName, _, _, _, _, _, _, instanceID = Get(GetInstanceInfo)
+		bgEntry = {
+			lifeHK = lifeHK, at = Util.Now(), name = Safe(instanceName),
+			instanceID = type(Safe(instanceID)) == "number" and Safe(instanceID) or nil, live = 0,
+		}
 	end
 end
 
@@ -376,10 +390,11 @@ local function ReadRecap(death)
 end
 
 function Detect.OnPlayerDead()
-	if not started or inBattleground then return end
+	if not started then return end
 	local bucket = Bucket()
 	if not bucket then return end
-	local death = { t = Util.Now(), bucket = bucket, pos = Util.Position(), lifeHK = lastHK }
+	-- The recap is readable in battlegrounds too; the position is not.
+	local death = { t = Util.Now(), bucket = bucket, pos = Util.Position(), lifeHK = lastHK, sub = Get(GetSubZoneText) }
 	local attempt = 0
 	local function try()
 		attempt = attempt + 1
@@ -388,7 +403,7 @@ function Detect.OnPlayerDead()
 			if fields then
 				local record = {
 					type = "D", t = death.t, bucket = death.bucket, lifeHK = death.lifeHK or Detect.ReadLifeHK() or 0,
-					mapID = death.pos.mapID, x = death.pos.x, y = death.pos.y,
+					mapID = death.pos.mapID, x = death.pos.x, y = death.pos.y, sub = death.bucket == "b" and death.sub or nil,
 				}
 				for key, value in pairs(fields) do record[key] = value end
 				Records.AppendOwn(record)
@@ -409,14 +424,103 @@ end
 
 --------------------------------------------------------------------------------
 -- Battlegrounds
+--
+-- The scoreboard is secret during a match and fully readable once it is
+-- over: my row, and the row of every guild teammate, with or without the
+-- addon, go into one match record.
 --------------------------------------------------------------------------------
+
+local function ReadRow(info)
+	if Util.IsSecret(info) or Util.IsSecretTable(info) or type(info) ~= "table" then return nil end
+	local row = {
+		name = Safe(info.name), guid = Safe(info.guid), kb = Safe(info.killingBlows), hk = Safe(info.honorableKills),
+		deaths = Safe(info.deaths), honor = Safe(info.honorGained), faction = Safe(info.faction),
+		damage = Safe(info.damageDone), healing = Safe(info.healingDone),
+	}
+	for _, key in ipairs({ "kb", "hk", "deaths", "honor" }) do
+		if type(row[key]) ~= "number" then return nil end
+	end
+	return row
+end
+
+-- The scoreboard, or nil while it is still secret or empty.
+local function ReadScoreboard()
+	local me = Identity.me
+	if not (C_PvP and Fn(C_PvP.GetScoreInfo)) then return nil end
+	local count = Get(GetNumBattlefieldScores)
+	if type(count) ~= "number" or count == 0 then return nil end
+	local mine
+	if me.guid and Fn(C_PvP.GetScoreInfoByPlayerGuid) then
+		local ok, info = pcall(C_PvP.GetScoreInfoByPlayerGuid, me.guid)
+		if ok then mine = ReadRow(info) end
+	end
+	local lines = {}
+	for index = 1, count do
+		local ok, info = pcall(C_PvP.GetScoreInfo, index)
+		local row = ok and ReadRow(info) or nil
+		if row then
+			local guid = type(row.guid) == "string" and row.guid or nil
+			local isMe = guid and guid == me.guid or Identity.IsMe(row.name, guid)
+			if isMe then
+				mine = mine or row
+			else
+				local member = Identity.Member(row.name)
+				local tail = Util.Tail(guid) or (member and member.tail) or nil
+				if member and tail and (not member.tail or member.tail == tail) then
+					lines[#lines + 1] = { tail = tail, name = row.name, kb = row.kb, hk = row.hk, deaths = row.deaths, honor = row.honor }
+				end
+			end
+		end
+	end
+	if not mine then return nil end
+	return mine, lines
+end
+
+local function WriteMatch(entry, mine, lines, lifeHK)
+	local pos = Util.Position()
+	Records.AppendOwn({
+		type = "M", t = Util.Now(), instanceID = entry.instanceID, duration = entry.at and (Util.Now() - entry.at) or nil,
+		winner = entry.winner, hk = mine.hk, kb = mine.kb, deaths = mine.deaths, honor = mine.honor,
+		damage = type(mine.damage) == "number" and mine.damage or nil, healing = type(mine.healing) == "number" and mine.healing or nil,
+		lifeHK = lifeHK, live = math.min(entry.live or 0, mine.hk), mapID = pos.mapID, lines = lines,
+	})
+	entry.done = true
+	ns.Count("detect.bgMatch")
+end
+
+local function TryScoreboard(entry, attempt)
+	if entry.done or bgEntry ~= entry then return end
+	local mine, lines = ReadScoreboard()
+	local lifeHK = Detect.ReadLifeHK() or lastHK or 0
+	if mine then
+		WriteMatch(entry, mine, lines, lifeHK)
+		return
+	end
+	if attempt < #SCORE_DELAYS then
+		pcall(RequestBattlefieldScoreData)
+		Util.After(SCORE_DELAYS[attempt + 1], "scoreboard", TryScoreboard, entry, attempt + 1)
+	else
+		ns.Count("detect.scoreboardUnreadable")
+	end
+end
+
+function Detect.OnMatchComplete(winner)
+	if not inBattleground or not bgEntry then return end
+	bgEntry.winner = type(Safe(winner)) == "number" and Safe(winner) or Get(GetBattlefieldWinner)
+	if type(bgEntry.winner) ~= "number" then bgEntry.winner = nil end
+	pcall(RequestBattlefieldScoreData)
+	Util.After(SCORE_DELAYS[1], "scoreboard", TryScoreboard, bgEntry, 1)
+end
 
 function Detect.OnEnteringWorld()
 	local now = Util.Bucket() == "bg"
 	if now and not inBattleground then
 		inBattleground = true
 		local instanceName, _, _, _, _, _, _, instanceID = Get(GetInstanceInfo)
-		bgEntry = { lifeHK = Detect.ReadLifeHK() or lastHK, at = Util.Now(), name = Safe(instanceName), instanceID = Safe(instanceID) }
+		bgEntry = {
+			lifeHK = Detect.ReadLifeHK() or lastHK, at = Util.Now(), name = Safe(instanceName),
+			instanceID = type(Safe(instanceID)) == "number" and Safe(instanceID) or nil, live = 0,
+		}
 		recentKills, recentDeaths = {}, {}
 		ns.Count("detect.bgEnter")
 	elseif not now and inBattleground then
@@ -424,12 +528,11 @@ function Detect.OnEnteringWorld()
 		local lifeHK = Detect.ReadLifeHK()
 		local entry = bgEntry
 		bgEntry = nil
-		if lifeHK and entry and type(entry.lifeHK) == "number" and lifeHK > entry.lifeHK then
-			local pos = Util.Position()
-			Records.AppendOwn({
-				type = "M", t = Util.Now(), mapID = pos.mapID, hk = lifeHK - entry.lifeHK, lifeHK = lifeHK,
-			})
-			ns.Count("detect.bgMatch")
+		-- No scoreboard came: the counter still says how many HKs the match
+		-- gave, and that much is kept.
+		if entry and not entry.done and lifeHK and type(entry.lifeHK) == "number" and lifeHK > entry.lifeHK then
+			WriteMatch(entry, { hk = lifeHK - entry.lifeHK, kb = 0, deaths = 0, honor = 0 }, {}, lifeHK)
+			ns.Count("detect.bgMatchFallback")
 		end
 		if lifeHK then
 			lastHK = lifeHK
@@ -451,6 +554,7 @@ ns.On("PARTY_KILL", Detect.OnPartyKill)
 ns.On("UNIT_DIED", Detect.OnUnitDied)
 ns.On("PLAYER_PVP_KILLS_CHANGED", Detect.OnKillsChanged)
 ns.On("PLAYER_DEAD", Detect.OnPlayerDead)
+ns.On("PVP_MATCH_COMPLETE", Detect.OnMatchComplete)
 ns.Hook("Login", Detect.Start)
 ns.Hook("EnteringWorld", Detect.OnEnteringWorld)
 ns.Hook("Debug", function()

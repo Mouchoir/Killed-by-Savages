@@ -78,7 +78,7 @@ local kill = {
 	vclass = "WARRIOR", vrace = "Orc", vlevel = 16, mapID = 52, x = 0.4321, y = 0.6789, guild = "Savages", lifeHK = 12,
 }
 local text = Records.Encode(kill)
-check("a kill encodes to one line", text == "K1;7;1794009143;w;kb;6938-001DF7A9;Rikkoshet Greyjoy;WARRIOR;Orc;16;52;0.4321;0.6789;Savages;12", text)
+check("a kill encodes to one line", text == "K1;7;1794009143;w;kb;6938-001DF7A9;Rikkoshet Greyjoy;WARRIOR;Orc;16;52;0.4321;0.6789;Savages;12;", text)
 local back = Records.Decode(text)
 check("and decodes back", back.type == "K" and back.seq == 7 and back.vname == "Rikkoshet Greyjoy" and back.x == 0.4321 and back.lifeHK == 12)
 check("decoding is cached", Records.Decode(text) == back)
@@ -87,8 +87,13 @@ check("fields with separators are flattened", Records.Encode({ type = "K", seq =
 local death = Records.Decode(Records.EncodeDeath({ seq = 8, t = 1794009577, bucket = "w", ktail = "6938-00AA00BB",
 	kname = "Walter Zornickel", kclass = "HUNTER", krace = "Orc", kkind = "p", spell = "Tir des arcanes", mapID = 52, x = 0.1, y = 0.2, lifeHK = 12 }))
 check("a death decodes", death.type == "D" and death.kname == "Walter Zornickel" and death.kkind == "p" and death.spell == "Tir des arcanes")
-local match = Records.Decode("M1;9;1794010000;1459;7;19")
-check("a match decodes with its bucket", match.type == "M" and match.bucket == "b" and match.hk == 7 and match.lifeHK == 19)
+local match = Records.Decode("M1;9;1794010000;489;900;1;21;3;2;450;12000;300;523;21;1459;1234-00000005:Edric Vale:4:25:1:300,1234-00000002:Brenna Ironvale:1:9:3:80")
+check("a match decodes with its scoreboard", match.type == "M" and match.bucket == "b" and match.hk == 21 and match.kb == 3 and match.live == 21
+	and match.instanceID == 489 and match.lifeHK == 523 and #match.lines == 2 and match.lines[1].name == "Edric Vale" and match.lines[1].hk == 25
+	and match.lines[2].tail == "1234-00000002")
+check("a match round-trips through its encoder", Records.Encode(match) == "M1;9;1794010000;489;900;1;21;3;2;450;12000;300;523;21;1459;1234-00000005:Edric Vale:4:25:1:300,1234-00000002:Brenna Ironvale:1:9:3:80", Records.Encode(match))
+check("the same match has one key for every member", Records.MatchKey(match) == Records.MatchKey(Records.Decode("M1;2;1794010030;489;;;5;0;1;;;;10;0;;")))
+check("live HKs of a match do not count twice in the chain", Records.Gain(match) == 0 and Records.Gain(Records.Decode("M1;2;1794010030;489;;;5;0;1;;;;10;2;;")) == 3)
 local counter = Records.Decode("X1;10;1794010100;u;19;24")
 check("a counter record decodes", counter.type == "X" and counter.fromHK == 19 and counter.toHK == 24)
 check("an unknown record type is ignored", Records.Decode("Z9;1;2;3") == nil and Records.Decode("K2;1;2") == nil)
@@ -109,7 +114,7 @@ local chain = {
 	Records.Decode("K1;1;100;w;unk;;;;;;;;;;501"),
 	Records.Decode("K1;2;110;w;unk;;;;;;;;;;502"),
 	Records.Decode("D1;3;120;w;;;;;p;;;;;502"),
-	Records.Decode("M1;4;130;1459;3;505"),
+	Records.Decode("M1;4;130;489;600;1;3;1;0;100;;;505;0;1459;"),
 	Records.Decode("X1;5;140;u;505;509"),
 	Records.Decode("K1;6;150;w;unk;;;;;;;;;;510"),
 }
@@ -286,17 +291,22 @@ check("no recap is counted, not recorded", #Journal(A) == before and A.counter("
 section("Battlegrounds")
 --------------------------------------------------------------------------------
 
+-- As seen in game: the counter and the recap stay readable in a
+-- battleground, enemies and the scoreboard are secret until the match ends,
+-- and chat is in lockdown.
 local function EnterBG(client)
 	local st = client.state
-	st.bucket, st.zone, st.mapID = "bg", "Vallée d'Alterac", 1459
-	st.secretIdentity, st.secretStats, st.chatLocked = true, true, true
+	st.bucket, st.zone, st.subzone, st.mapID = "bg", "Vallée d'Alterac", "Pic de Dun Baldar", 1459
+	st.secretIdentity, st.secretStats, st.secretScore, st.chatLocked = true, false, true, true
+	st.score = nil
 	client.fire("PLAYER_ENTERING_WORLD", false, false)
 end
 
 local function LeaveBG(client)
 	local st = client.state
-	st.bucket, st.zone, st.mapID = "world", "Contreforts de Hautebrande", 1424
-	st.secretIdentity, st.secretStats, st.chatLocked = false, false, false
+	st.bucket, st.zone, st.subzone, st.mapID = "world", "Contreforts de Hautebrande", "Moulin-de-Tarren", 1424
+	st.secretIdentity, st.secretStats, st.secretScore, st.chatLocked = false, false, false, false
+	st.score = nil
 	client.fire("PLAYER_ENTERING_WORLD", false, false)
 end
 
@@ -306,14 +316,50 @@ A.fire("PARTY_KILL", SECRET, SECRET)
 A.fire("UNIT_DIED", SECRET)
 A.state.lifetime = A.state.lifetime + 3
 A.fire("PLAYER_PVP_KILLS_CHANGED", "player")
-advance(10)
-check("nothing is recorded inside the battleground", #Journal(A) == before and A.ns.Detect.InBattleground() == true)
+advance(5)
+check("HKs inside a battleground are kills with no victim, placed by subzone", #Journal(A) == before + 3 and Last(A).type == "K"
+	and Last(A).how == "bg" and Last(A).bucket == "b" and Last(A).vtail == nil and Last(A).sub == "Pic de Dun Baldar", Last(A).how)
+check("their counters chain", Last(A).lifeHK == A.state.lifetime and Records.CheckChain(Journal(A)) == true)
+A.state.recap = { { sourceName = "Ren Steelfeather", sourceGUID = HORDE[6].guid, sourceFlags = 0x548, spellName = "Morsure de serpent" } }
+A.state.recapReadyAt = Mock.Now()
+A.fire("PLAYER_DEAD")
+advance(6)
+check("a death in a battleground is recorded with its killer", Last(A).type == "D" and Last(A).bucket == "b" and Last(A).kname == "Vexa Cinderhorn"
+	and Last(A).sub == "Pic de Dun Baldar")
+A.state.recap = nil
+
+-- The match ends: the scoreboard opens up, with a guildmate who has no addon.
+A.state.score = {
+	{ name = "Aldric Stormhand", guid = A.guid, kb = 3, hk = 3, deaths = 1, honor = 120, faction = 1, class = "HUNTER", race = "Humain" },
+	{ name = "Edric Vale", guid = Guid(5), kb = 4, hk = 25, deaths = 1, honor = 300, faction = 1, class = "PALADIN", race = "Humain" },
+	{ name = "Gruk Bonecrusher", guid = HORDE[1].guid, kb = 6, hk = 30, deaths = 5, honor = 700, faction = 0, class = "WARRIOR", race = "Orc" },
+}
+A.state.secretScore = false
+A.state.winner = 1
+before = #Journal(A)
+A.fire("PVP_MATCH_COMPLETE", 1, 905)
+advance(8)
+record = Last(A)
+check("the end of the match writes the scoreboard", #Journal(A) == before + 1 and record.type == "M" and record.hk == 3 and record.kb == 3
+	and record.deaths == 1 and record.honor == 120 and record.live == 3 and record.winner == 1, record and record.type)
+check("with the guild teammates on the board, not the enemies", #record.lines == 1 and record.lines[1].tail == "1234-00000005"
+	and record.lines[1].name == "Edric Vale" and record.lines[1].kb == 4 and record.lines[1].hk == 25)
+check("the match adds nothing to the chain the live kills already counted", Records.Gain(record) == 0 and Records.CheckChain(Journal(A)) == true)
+LeaveBG(A)
+advance(1)
+check("leaving a finished match records nothing more", #Journal(A) == before + 1)
+
+-- A match whose scoreboard never came: the counter's delta is kept.
+EnterBG(A)
+A.state.lifetime = A.state.lifetime + 2
+A.fire("PLAYER_PVP_KILLS_CHANGED", "player")
+advance(5)
 LeaveBG(A)
 advance(1)
 record = Last(A)
-check("leaving records the HKs the battleground gave", record.type == "M" and record.hk == 3 and record.bucket == "b", record and record.hk)
-check("with the counter after the match", record.lifeHK == A.state.lifetime and a.characters[Guid(1)].lifeHK == A.state.lifetime)
-check("the chain still holds across the match", Records.CheckChain(Journal(A)) == true)
+check("without a scoreboard, leaving keeps the counter's delta", record.type == "M" and record.hk == 2 and record.live == 2 and #record.lines == 0
+	and A.counter("detect.bgMatchFallback") == 1, record and record.type)
+check("the chain still holds", Records.CheckChain(Journal(A)) == true)
 
 -- A battleground that gave nothing records nothing.
 before = #Journal(A)
@@ -575,14 +621,15 @@ local function Expected(client, bucket)
 		local wanted = bucket == "all" or r.bucket == bucket
 		if r.type == "K" then
 			lifeKs[#lifeKs + 1] = r.lifeHK
-			if wanted then
+			-- Battleground kills are counted from the match's scoreboard.
+			if wanted and r.bucket ~= "b" then
 				sum.kills = sum.kills + 1
 				if r.how == "kb" or r.how == "pet" then sum.kb = sum.kb + 1 end
 			end
-		elseif r.type == "D" and wanted then
+		elseif r.type == "D" and wanted and r.bucket ~= "b" then
 			sum.deaths = sum.deaths + 1
 		elseif r.type == "M" and wanted then
-			sum.kills = sum.kills + r.hk
+			sum.kills, sum.kb, sum.deaths = sum.kills + r.hk, sum.kb + r.kb, sum.deaths + r.deaths
 		elseif r.type == "X" and wanted then
 			counters[#counters + 1] = r
 		end
@@ -604,8 +651,16 @@ check("a character's totals match its journal", all.kills == want.kills and all.
 check("assists are the kills that were not killing blows", all.assists == all.kills - all.kb and all.assists > 0)
 check("the K/D divides kills by deaths", math.abs(all.kd - all.kills / all.deaths) < 0.001)
 local world, bg = Stats.Character(A.guid, "all", "w"), Stats.Character(A.guid, "all", "b")
-check("the battleground bucket holds the match's HKs", bg.kills == Expected(A, "b").kills and bg.kills == 3, bg.kills)
+check("the battleground bucket holds the matches' numbers", bg.kills == Expected(A, "b").kills and bg.kills == 5 and bg.kb == 3 and bg.deaths == 1, bg.kills)
 check("counter records count in the total only", world.kills + bg.kills < all.kills and world.kills == Expected(A, "w").kills)
+check("a guildmate without the addon is credited from the scoreboard", Stats.Character(Guid(5), "all", "b").kills == 25
+	and Stats.Character(Guid(5), "all", "b").kb == 4)
+local credited = false
+for _, row in ipairs(Stats.Characters("all", "b")) do
+	if row.guid == Guid(5) and row.name == "Edric Vale" and row.kills == 25 then credited = true end
+end
+check("and ranked with the others in the battleground view", credited)
+check("battleground enemy deaths are the guild's killing blows on the board", Stats.Guild("all", "b").distinct == 7, Stats.Guild("all", "b").distinct)
 check("everything happened this week", Stats.Character(A.guid, "week", "all").kills == all.kills and Stats.Character(A.guid, "last", "all").kills == 0)
 check("the week anchor came from the client", A.db().weekAnchor == Mock.Server() + 30 * 3600 or math.abs(A.db().weekAnchor - (Mock.Server() + 30 * 3600)) < 200)
 
@@ -613,7 +668,7 @@ local players = Stats.Players("all", "all")
 check("players are ranked, A first", players[1] and players[1].name == "Aldric Stormhand" and players[1].me == true and players[1].rank == 1,
 	players[1] and players[1].name)
 check("a player's numbers are its characters' numbers", players[1].kills == all.kills and #players[1].characters == 1)
-check("members without kills or deaths this period stay out of the ranking", #players == 1, #players)
+check("members without kills or deaths this period stay out of the ranking", #players == 2, #players)
 A.ns.Identity.SetAlias("  Aldric^the;Bold  ")
 advance(10)
 check("an alias is cleaned and shown as the player's name", Stats.Players("all", "all")[1].name == "Aldric the Bold")
@@ -651,11 +706,31 @@ check("with how many members killed it", victims[1].byCount >= 1 and victims[1].
 local mine = Stats.Victims("all", "all", { guid = A.guid })
 check("a character's own board is a subset", #mine <= #Stats.Victims("all", "all"))
 local killers = Stats.Killers("all", "all", nil, 5)
-check("our killers are listed from the deaths", killers[1] and (killers[1].name == "Gruk Bonecrusher" or killers[1].name == "Schwarzesau"))
+check("our killers are listed from the deaths, battlegrounds included", #killers == 3 and killers[1].count == 1
+	and (killers[1].name == "Vexa Cinderhorn" or killers[1].name == "Gruk Bonecrusher" or killers[1].name == "Schwarzesau"), #killers)
 local feed = Stats.Feed(10, "all")
 check("the feed is newest first with the author's name", feed[1] and feed[1].t >= feed[2].t and feed[1].info and feed[1].info.name ~= nil)
 local milestone = Stats.Milestone()
 check("the next milestone is the first one not reached", milestone.next == 100 and milestone.previous == 0 and milestone.progress == milestone.distinct / 100)
+
+-- B saw the same battleground as A: its record credits Edric once more,
+-- which counts once; B's own row counts for B.
+local matchTime
+for _, r in ipairs(Journal(A)) do
+	if r.type == "M" and #r.lines == 1 then matchTime = r.t end
+end
+Mock.SetGuildRoster({ { guid = A.guid, rank = 0 }, { guid = B.guid, rank = 2 }, { guid = C.guid, rank = 4 }, { guid = Guid(5), rank = 3 },
+	{ guid = D.guid, rank = 3 }, { guid = E.guid, rank = 3 } })
+RefreshRosters()
+B.state.lifetime = B.state.lifetime + 5
+B.ns.Records.AppendOwn({ type = "M", t = matchTime, instanceID = 30, hk = 5, kb = 1, deaths = 2, honor = 90,
+	lifeHK = B.state.lifetime, live = 0,
+	lines = { { tail = "1234-00000005", name = "Edric Vale", kb = 4, hk = 25, deaths = 1, honor = 300 } } })
+advance(8)
+check("a second member's record of the same match counts the teammate once", Stats.Character(Guid(5), "all", "b").kills == 25
+	and Stats.Character(B.guid, "all", "b").kills == 5 and Stats.Character(B.guid, "all", "b").kb == 1,
+	Stats.Character(Guid(5), "all", "b").kills .. "/" .. Stats.Character(B.guid, "all", "b").kills)
+check("the guild's battleground blows count once per match too", Stats.Guild("all", "b").distinct == 8, Stats.Guild("all", "b").distinct)
 
 --------------------------------------------------------------------------------
 section("Compaction: old pages packed, still served and counted")
@@ -719,7 +794,8 @@ UI.SetPeriod("last")
 check("a period without data shows the empty state", window.tabFrames.me.view.empty.shown == true)
 UI.SetPeriod("all")
 UI.SetBucket("b")
-check("the battleground bucket keeps the match's HKs", Rows(window.tabFrames.me.view)[1] and Rows(window.tabFrames.me.view)[1].row.data.kills == 3)
+check("the battleground bucket keeps the matches' HKs", Rows(window.tabFrames.me.view)[1] and Rows(window.tabFrames.me.view)[1].row.data.kills == 5,
+	Rows(window.tabFrames.me.view)[1] and Rows(window.tabFrames.me.view)[1].row.data.kills)
 UI.SetBucket("all")
 UI.SelectTab("players")
 A.slash("")

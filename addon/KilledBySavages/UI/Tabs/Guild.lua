@@ -30,7 +30,7 @@ local function FeedRows(period, bucket)
 				row.race = record.krace
 				row.enemyClass = record.kkind == "e" and L.TOOLTIP_PET or ns.UI.ClassName(record.kclass)
 			end
-			row.zone = Theme.ZoneName(record.mapID) or ""
+			row.zone = record.sub or Theme.ZoneName(record.mapID) or ""
 			rows[#rows + 1] = row
 		end
 	end

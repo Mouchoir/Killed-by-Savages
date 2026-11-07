@@ -28,7 +28,7 @@ Stats.MILESTONES = { 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 10000
 Stats.PERIODS = { "week", "last", "all" }
 Stats.BUCKETS = { "w", "b", "all" }
 
-local cache = { authors = {}, guild = {}, players = {}, feed = {} }
+local cache = { authors = {}, guild = {}, players = {}, feed = {}, credits = nil }
 
 --------------------------------------------------------------------------------
 -- Weeks
@@ -108,8 +108,12 @@ local function Aggregate(guid)
 		local provisional = author.provisional ~= nil and author.provisional[seq] == true
 		if provisional then agg.provisional = agg.provisional + 1 end
 		if record.type == "K" then
-			Bump(weekly, record.bucket, "hk")
-			if IsKillingBlow(record) then Bump(weekly, record.bucket, "kb") end
+			-- Battleground kills are counted from the match's scoreboard, not
+			-- one by one; here they only feed the timeline.
+			if record.bucket ~= "b" then
+				Bump(weekly, record.bucket, "hk")
+				if IsKillingBlow(record) then Bump(weekly, record.bucket, "kb") end
+			end
 			lifeKs[#lifeKs + 1] = record.lifeHK
 			agg.kills[#agg.kills + 1] = { seq = seq, record = record, provisional = provisional }
 			if record.vtail then
@@ -126,7 +130,7 @@ local function Aggregate(guid)
 				end
 			end
 		elseif record.type == "D" then
-			Bump(weekly, record.bucket, "deaths")
+			if record.bucket ~= "b" then Bump(weekly, record.bucket, "deaths") end
 			agg.deaths[#agg.deaths + 1] = { seq = seq, record = record, provisional = provisional }
 			local key = record.ktail or (record.kname and ("pet:" .. record.kname)) or nil
 			if key then
@@ -141,8 +145,6 @@ local function Aggregate(guid)
 					killer.name, killer.class, killer.race = record.kname, record.kclass, record.krace
 				end
 			end
-		elseif record.type == "M" then
-			Bump(weekly, "b", "hk", record.hk or 0)
 		elseif record.type == "X" then
 			counters[#counters + 1] = { week = week, bucket = record.bucket, from = record.fromHK, to = record.toHK }
 		end
@@ -176,6 +178,69 @@ function Stats.AuthorAggregate(guid)
 	return agg
 end
 
+--------------------------------------------------------------------------------
+-- Battlegrounds: the scoreboards
+--
+-- Every match record held, from any journal, names the guild members who
+-- were on the board and what they did. The same match seen by several
+-- members counts once; a member's own row beats a teammate's copy of it.
+--------------------------------------------------------------------------------
+
+local function MatchCredits()
+	if cache.credits then return cache.credits end
+	local credits = { matches = {}, byTail = {} }
+	for guid in pairs(ns.db.authors) do
+		local authorTail = Util.Tail(guid)
+		Records.Each(guid, function(record)
+			if record.type == "M" then
+				local key = Records.MatchKey(record)
+				local match = credits.matches[key]
+				if not match then
+					match = { t = record.t, week = Stats.WeekIndex(record.t), instanceID = record.instanceID, lines = {} }
+					credits.matches[key] = match
+				end
+				if authorTail then
+					match.lines[authorTail] = { tail = authorTail, hk = record.hk or 0, kb = record.kb or 0, deaths = record.deaths or 0, own = true }
+				end
+				for _, line in ipairs(record.lines or {}) do
+					if line.tail and not match.lines[line.tail] then
+						match.lines[line.tail] = { tail = line.tail, name = line.name, hk = line.hk, kb = line.kb, deaths = line.deaths }
+					end
+				end
+			end
+		end)
+	end
+	for _, match in pairs(credits.matches) do
+		for tail, line in pairs(match.lines) do
+			local byWeek = credits.byTail[tail]
+			if not byWeek then
+				byWeek = {}
+				credits.byTail[tail] = byWeek
+			end
+			local counts = byWeek[match.week]
+			if not counts then
+				counts = NewCounts()
+				byWeek[match.week] = counts
+			end
+			counts.hk = counts.hk + (line.hk or 0)
+			counts.kb = counts.kb + (line.kb or 0)
+			counts.deaths = counts.deaths + (line.deaths or 0)
+		end
+	end
+	cache.credits = credits
+	return credits
+end
+Stats.MatchCredits = MatchCredits
+
+-- Every character the board knows: journals held, plus members credited by
+-- a scoreboard without a journal of their own.
+local function KnownGuids()
+	local set = {}
+	for guid in pairs(ns.db.authors) do set[guid] = true end
+	for tail in pairs(MatchCredits().byTail) do set["Player-" .. tail] = true end
+	return set
+end
+
 local function Add(into, counts)
 	into.kills = into.kills + (counts.hk or 0)
 	into.kb = into.kb + (counts.kb or 0)
@@ -197,15 +262,22 @@ function Stats.Character(guid, period, bucket)
 	local agg = Stats.AuthorAggregate(guid)
 	local sum = { kills = 0, kb = 0, deaths = 0 }
 	local current = Stats.CurrentWeek()
-	for week, weekly in pairs(agg.weeks) do
-		if InPeriod(period, week, current) then
-			if bucket == "all" then
-				Add(sum, weekly.w)
-				Add(sum, weekly.b)
-				Add(sum, weekly.u)
-			else
-				Add(sum, weekly[bucket] or NewCounts())
+	if bucket ~= "b" then
+		for week, weekly in pairs(agg.weeks) do
+			if InPeriod(period, week, current) then
+				if bucket == "all" then
+					Add(sum, weekly.w)
+					Add(sum, weekly.u)
+				else
+					Add(sum, weekly[bucket] or NewCounts())
+				end
 			end
+		end
+	end
+	if bucket == "b" or bucket == "all" then
+		local byWeek = MatchCredits().byTail[Util.Tail(guid) or ""]
+		for week, counts in pairs(byWeek or {}) do
+			if InPeriod(period, week, current) then Add(sum, counts) end
 		end
 	end
 	sum.provisional = agg.provisional
@@ -249,12 +321,14 @@ local function SortRows(rows)
 	return rows
 end
 
--- Every guild member whose journal says something for the period, ranked.
+-- Every guild member whose journal, or whose scoreboards, say something
+-- for the period, ranked.
 function Stats.Characters(period, bucket)
 	local rows = {}
+	local known = KnownGuids()
 	for tail, member in pairs(Identity.roster.byTail) do
 		local guid = member.guid or ("Player-" .. tail)
-		if ns.db.authors[guid] then
+		if known[guid] then
 			local sum = Stats.Character(guid, period, bucket)
 			if sum.kills > 0 or sum.deaths > 0 then
 				local info = Stats.AuthorInfo(guid)
@@ -274,10 +348,10 @@ function Stats.Players(period, bucket)
 	local key = period .. ":" .. bucket
 	if cache.players[key] then return cache.players[key] end
 	local groups = {}
+	local known = KnownGuids()
 	for tail, member in pairs(Identity.roster.byTail) do
 		local guid = member.guid or ("Player-" .. tail)
-		local author = ns.db.authors[guid]
-		if author then
+		if known[guid] then
 			local info = Stats.AuthorInfo(guid)
 			local groupKey = info.playerKey or ("char:" .. guid)
 			local group = groups[groupKey]
@@ -382,16 +456,26 @@ function Stats.Guild(period, bucket)
 	local key = period .. ":" .. bucket
 	if cache.guild[key] then return cache.guild[key] end
 	local sum = { kills = 0, kb = 0, deaths = 0, authors = 0, provisional = 0 }
-	for guid in pairs(ns.db.authors) do
+	for guid in pairs(KnownGuids()) do
 		local character = Stats.Character(guid, period, bucket)
 		sum.kills = sum.kills + character.kills
 		sum.kb = sum.kb + character.kb
 		sum.deaths = sum.deaths + character.deaths
 		sum.provisional = sum.provisional + character.provisional
-		sum.authors = sum.authors + 1
+		if ns.db.authors[guid] then sum.authors = sum.authors + 1 end
 	end
 	Finish(sum)
-	sum.distinct = DistinctKills(AllKills(period, bucket))
+	-- Enemy deaths: in the world each victim once; in battlegrounds the
+	-- killing blows of the guild's members, each one an enemy down.
+	sum.distinct = bucket == "b" and 0 or DistinctKills(AllKills(period, bucket))
+	if bucket ~= "w" then
+		local current = Stats.CurrentWeek()
+		for _, match in pairs(MatchCredits().matches) do
+			if InPeriod(period, match.week, current) then
+				for _, line in pairs(match.lines) do sum.distinct = sum.distinct + (line.kb or 0) end
+			end
+		end
+	end
 	cache.guild[key] = sum
 	return sum
 end
@@ -558,7 +642,7 @@ end
 
 function Stats.Invalidate(guid)
 	if guid then cache.authors[guid] = nil else cache.authors = {} end
-	cache.guild, cache.players, cache.feed = {}, {}, {}
+	cache.guild, cache.players, cache.feed, cache.credits = {}, {}, {}, nil
 	ns.Fire("StatsChanged", guid)
 end
 
