@@ -26,8 +26,8 @@ env:
   ADDON_NAME: KilledBySavages
   ADDON_SOURCE: addon/KilledBySavages
   CURSEFORGE_BASE_URL: https://wow.curseforge.com
-  # Set once the CurseForge project exists; the upload step refuses to run without it.
-  CURSEFORGE_PROJECT_ID: ""
+  # The CurseForge project: https://www.curseforge.com/wow/addons/killed-by-savages
+  CURSEFORGE_PROJECT_ID: "1790222"
   # WoW Forever only: interface 16001 -> CurseForge game version 1.60.1.
   PUBLISH_TOCS: KilledBySavages.toc
 
