@@ -345,31 +345,15 @@ check("two kills were recorded before the crash", A.db().authors[Guid(1)].head =
 A.crash()
 A.login()
 advance(5)
-check("the next login starts from the last save", A.db().authors[Guid(1)].head == headBefore + 1 or A.db().authors[Guid(1)].head == headBefore,
-	A.db().authors[Guid(1)].head)
+check("the jump is deferred while the guild may hold the lost records", A.ns.Records.Holding() == true and Last(A).type ~= "X")
+-- Nobody else is online: the recovery times out.
+advance(130)
+check("the next login starts from the last save", A.db().authors[Guid(1)].head == headBefore + 1, A.db().authors[Guid(1)].head)
 record = Last(A)
 check("the lost HKs are kept as a counter record", record.type == "X" and record.toHK - record.fromHK == 2 and record.bucket == "u"
 	and A.counter("detect.jump") == 1, record and record.type)
+check("the HK left pending by the last session was settled before the jump", Journal(A)[#Journal(A) - 1].how == "unk")
 check("the chain still holds after the jump", Records.CheckChain(Journal(A)) == true)
-
--- Sync can take a jump over: no counter record then, until it decides.
-A.logout()
-A.state.lifetime = A.state.lifetime + 1
-headBefore = A.saved.authors[Guid(1)].head
-local jumpSeen
-A.onBoot = function(ns)
-	ns.Hook("CounterJump", function(from, to)
-		jumpSeen = { from = from, to = to }
-		ns.Detect.DeferJump()
-	end)
-end
-A.login()
-advance(5)
-check("a deferred jump writes no counter record", jumpSeen and jumpSeen.to - jumpSeen.from == 1
-	and A.db().authors[Guid(1)].head == headBefore, A.db().authors[Guid(1)].head)
-A.ns.Detect.ResolveJump(jumpSeen.from, jumpSeen.to)
-check("until the taker resolves it", Last(A).type == "X" and Last(A).toHK == jumpSeen.to)
-A.onBoot = nil
 
 -- HKs earned in a dungeon are counted without a place.
 A.state.bucket = "instance"
@@ -377,6 +361,203 @@ GainHK(A)
 advance(5)
 check("an HK outside world and battleground is a counter record", Last(A).type == "X" and Last(A).bucket == "u")
 A.state.bucket = "world"
+
+--------------------------------------------------------------------------------
+section("Sync: hellos, live records, catch-up by whisper")
+--------------------------------------------------------------------------------
+
+local network = Mock.network
+
+local function RefreshRosters()
+	advance(11)
+	for _, client in ipairs(Mock.clients) do
+		if client.online then client.fire("GUILD_ROSTER_UPDATE") end
+	end
+end
+
+local function SentSince(mark, channel, kind)
+	local n = 0
+	for index = mark + 1, #network.sent do
+		local sent = network.sent[index]
+		if sent.channel == channel and sent.text:sub(1, 1) == kind then n = n + 1 end
+	end
+	return n
+end
+
+local function Held(client, author)
+	local entry = client.db().authors[author.guid]
+	return entry and entry.head or 0, entry and entry.count or 0
+end
+
+local Atail = A.ns.Identity.me.tail
+local aHead = A.db().authors[A.guid].head
+check("A has a journal to share", aHead >= 10, aHead)
+
+local mark = #network.sent
+B.login()
+C.login()
+advance(70)
+check("hellos go out on GUILD within a minute of login", SentSince(mark, "GUILD", "H") >= 2)
+check("B and C know each other", B.ns.Sync.State().peers["corwin ashdown"] ~= nil and C.ns.Sync.State().peers["brenna ironvale"] ~= nil)
+check("A, logged in long before, does not hello again", A.counter("sync.hello.login") == A.counter("sync.helloReceived") - A.counter("sync.helloReceived") + A.counter("sync.hello.login"))
+advance(200)
+local bHead, bCount = Held(B, A)
+check("B caught up with A's whole journal", bHead == aHead and bCount == aHead, bHead .. "/" .. bCount)
+local cHead = Held(C, A)
+check("so did C", cHead == aHead, cHead)
+check("pages travelled by whisper, not on the guild channel", SentSince(mark, "WHISPER", "B") > 0 and SentSince(mark, "GUILD", "B") == 0)
+check("the copies are the same text", B.db().authors[A.guid].log[3] == A.db().authors[A.guid].log[3])
+check("A's profile reached B from A itself", B.db().authors[A.guid].profile and B.db().authors[A.guid].profile.name == "Aldric Stormhand"
+	and B.db().authors[A.guid].profileVerified == true)
+check("B's copy of A is confirmed up to A's head", B.db().authors[A.guid].confirmedHead == aHead)
+
+-- A live kill reaches everyone within seconds.
+mark = #network.sent
+A.fire("PARTY_KILL", A.guid, HORDE[1].guid)
+A.fire("UNIT_DIED", HORDE[1].guid)
+GainHK(A)
+advance(8)
+check("a live record goes out once on GUILD", SentSince(mark, "GUILD", "R") == 1)
+check("and reaches B and C with the same text", B.db().authors[A.guid].log[aHead + 1] == A.db().authors[A.guid].log[aHead + 1]
+	and C.db().authors[A.guid].log[aHead + 1] ~= nil)
+check("B counts it as confirmed", B.db().authors[A.guid].confirmedHead == aHead + 1 and B.counter("sync.recordReceived") >= 1)
+aHead = aHead + 1
+
+-- A record claiming A's journal from someone else is refused.
+B.ns.Sync.SendRaw(("R^%s^%d^K1;%d;%d;w;unk;;;;;;;;;;999"):format(Atail, aHead + 1, aHead + 1, Mock.Server()), "GUILD")
+advance(3)
+check("a record from someone who is not the author is refused", C.counter("sync.recordNotAuthor") == 1 and Held(C, A) == aHead)
+
+-- A hole before a live record is asked back from the author.
+B.db().authors[A.guid].log[aHead] = nil
+B.db().authors[A.guid].head, B.db().authors[A.guid].count = aHead - 1, aHead - 1
+GainHK(A)
+advance(60)
+check("a gap before a live record is filled from the author", B.db().authors[A.guid].log[aHead] ~= nil and Held(B, A) == aHead + 1)
+aHead = aHead + 1
+
+-- Throttled sends are retried, and the record still arrives.
+A.state.throttle = 2
+GainHK(A)
+advance(15)
+check("throttled sends are retried", A.counter("sync.out.R.AddonMessageThrottle") >= 1 and Held(C, A) == aHead + 1)
+aHead = aHead + 1
+
+--------------------------------------------------------------------------------
+section("Sync: an offline author, relays, forgeries")
+--------------------------------------------------------------------------------
+
+A.logout()
+local D = NewClient({ name = "Dalia Brightwater", guid = Guid(4), class = "PRIEST", race = "NightElf", guild = "Savages", lifetime = 300, rank = 3 })
+Mock.SetGuildRoster({ { guid = A.guid, rank = 0 }, { guid = B.guid, rank = 2 }, { guid = C.guid, rank = 4 }, { guid = Guid(5), rank = 3 }, { guid = D.guid, rank = 3 } })
+RefreshRosters()
+mark = #network.sent
+D.login()
+advance(400)
+check("a newcomer gets an offline author's journal from a holder", Held(D, A) == aHead, Held(D, A))
+check("relayed by B or C, and marked so", D.db().authors[A.guid].relayed and D.db().authors[A.guid].relayed > 0)
+check("holders answered the newcomer's inventory with what they had more of", SentSince(mark, "GUILD", "A") >= 1)
+check("only one holder served each page", SentSince(mark, "WHISPER", "B") <= 2 * math.ceil(aHead / 200) + 2)
+check("B's and C's own journals reached D too", D.db().authors[B.guid] ~= nil or Held(B, B) == 0)
+
+-- A forged inventory: C claims a huge head for A; nobody has those pages.
+local dCount = D.counter("sync.request")
+C.ns.Sync.SendRaw(("I^%s=999/999"):format(Atail), "GUILD")
+advance(120)
+check("a forged inventory yields no records", Held(D, A) == aHead and B.counter("sync.pageEmpty") + C.counter("sync.pageEmpty") >= 1)
+check("but it did cost a request", D.counter("sync.request") > dCount)
+
+-- A forged page: C invents two records for A that chain correctly, and
+-- advertises them. They spread, until A's own hello contradicts them.
+local lastA = A.ns.Records.Decode(A.saved.authors[A.guid].log[aHead])
+local forged1 = A.ns.Records.Encode({ type = "K", seq = aHead + 1, t = Mock.Server(), bucket = "w", how = "unk", lifeHK = lastA.lifeHK + 1 })
+local forged2 = A.ns.Records.Encode({ type = "K", seq = aHead + 2, t = Mock.Server(), bucket = "w", how = "unk", lifeHK = lastA.lifeHK + 2 })
+C.ns.Records.Store(A.guid, aHead + 1, forged1, "page")
+C.ns.Records.Store(A.guid, aHead + 2, forged2, "page")
+C.ns.Sync.SendRaw(("A^%s=%d/%d"):format(Atail, aHead + 2, aHead + 2), "GUILD")
+advance(120)
+check("a well-chained forged page is accepted for now", Held(D, A) == aHead + 2)
+A.login()
+advance(70)
+check("the author's hello purges records its counter cannot cover", Held(D, A) == aHead and D.counter("sync.purged") == 2
+	and Held(B, A) == aHead, Held(D, A))
+
+--------------------------------------------------------------------------------
+section("Sync: crash recovery, lockdown, timeouts")
+--------------------------------------------------------------------------------
+
+-- A makes two kills that everyone receives, then crashes: nothing saved.
+advance(60)
+A.fire("UNIT_DIED", HORDE[2].guid)
+GainHK(A)
+advance(5)
+A.fire("UNIT_DIED", HORDE[3].guid)
+GainHK(A)
+advance(10)
+check("two kills went out before the crash", Held(B, A) == aHead + 2)
+local recoveries = A.counter("sync.recoveryStart")
+local crashMark = #network.sent
+A.crash()
+A.login()
+advance(10)
+check("the lost session is detected and recovery starts", A.counter("sync.recoveryStart") == recoveries + 1 and A.ns.Records.Holding() == true)
+-- A kill during the recovery waits for its number.
+A.fire("UNIT_DIED", HORDE[4].guid)
+GainHK(A)
+advance(5)
+local _, heldCount = A.ns.Records.Holding()
+check("a kill during the recovery waits unnumbered", heldCount == 1, heldCount)
+advance(120)
+check("the lost records came back from a holder", Held(A, A) == aHead + 3 and A.counter("sync.recovered") == 1, Held(A, A))
+check("the holders answered on the guild channel and served by whisper", SentSince(crashMark, "GUILD", "A") >= 1
+	and SentSince(crashMark, "GUILD", "B") == 0 and SentSince(crashMark, "WHISPER", "B") >= 1)
+check("no counter record was written", (function()
+	for _, item in ipairs(Journal(A)) do
+		if item.type == "X" and item.seq > aHead then return false end
+	end
+	return true
+end)())
+check("the kill made during the recovery got the next number", Last(A).type == "K" and Last(A).seq == aHead + 3 and Last(A).vname == "Sylas Mournhollow")
+check("the chain holds through the recovery", Records.CheckChain(Journal(A)) == true)
+check("and B holds the same journal", Held(B, A) == aHead + 3)
+aHead = aHead + 3
+
+-- Chat lockdown: in a battleground nothing is sent, and it goes out after.
+EnterBG(B)
+mark = #network.sent
+B.ns.Sync.SendHello("recovery")
+advance(40)
+check("nothing is sent during the chat lockdown", SentSince(mark, "GUILD", "H") == 0 and B.counter("sync.wait.blocked") >= 1)
+LeaveBG(B)
+advance(40)
+check("the queue drains after the battleground", SentSince(mark, "GUILD", "H") == 1)
+
+-- A holder that never answers times out, and the next one is tried.
+local E = NewClient({ name = "Elwyn Thornfield", guid = Guid(6), class = "WARRIOR", guild = "Savages", lifetime = 40, rank = 3 })
+Mock.SetGuildRoster({ { guid = A.guid, rank = 0 }, { guid = B.guid, rank = 2 }, { guid = C.guid, rank = 4 }, { guid = Guid(5), rank = 3 },
+	{ guid = D.guid, rank = 3 }, { guid = E.guid, rank = 3 } })
+RefreshRosters()
+A.logout()
+EnterBG(B)
+E.login()
+advance(5)
+local state = E.ns.Sync.State()
+state.holders[Atail] = { ["brenna ironvale"] = { head = aHead, count = aHead, at = Mock.Server() } }
+E.ns.Sync.Schedule()
+advance(1)
+local pending = 0
+for _, request in pairs(state.requests) do
+	if request.holder == "Brenna Ironvale" then pending = pending + 1 end
+end
+check("the request went to the silent holder", pending == 1)
+advance(60)
+check("it timed out", E.counter("sync.requestTimeout") == 1)
+state.holders[Atail]["corwin ashdown"] = { head = aHead, count = aHead, at = Mock.Server() }
+E.ns.Sync.Schedule()
+advance(120)
+check("and the next holder served the page", Held(E, A) == aHead, Held(E, A))
+LeaveBG(B)
+advance(5)
 
 --------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")

@@ -296,6 +296,9 @@ function Detect.Start()
 	end
 	started = true
 	lastHK = lifeHK
+	-- HKs left unmatched by the last session belong before anything the
+	-- counter did since: they are settled first.
+	ResolvePending()
 	if char.baselineHK == nil then
 		-- First run on this character: everything before is not ours to count.
 		char.baselineHK = lifeHK
@@ -312,7 +315,6 @@ function Detect.Start()
 	end
 	char.lifeHK = lifeHK
 	Records.OwnProfile()
-	ResolvePending()
 	inBattleground = Util.Bucket() == "bg"
 	if inBattleground and not bgEntry then
 		bgEntry = { lifeHK = lifeHK, at = Util.Now() }

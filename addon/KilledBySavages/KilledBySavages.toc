@@ -26,3 +26,4 @@ Core\Identity.lua
 Core\Init.lua
 Core\Records.lua
 Core\Detect.lua
+Core\Sync.lua

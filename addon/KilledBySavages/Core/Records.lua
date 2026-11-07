@@ -277,10 +277,38 @@ function Records.Store(guid, seq, text, source)
 	return true, "added"
 end
 
+-- While Sync recovers the records a crash lost, new ones wait unnumbered:
+-- their seq must come after the recovered head.
+local held = {}
+local holding = false
+
+-- HoldOwn(false) stops holding without appending what waits: ReleaseOwn
+-- does that, once whatever must come first is in.
+function Records.HoldOwn(state)
+	holding = state ~= false
+end
+
+function Records.ReleaseOwn()
+	holding = false
+	local list = held
+	held = {}
+	for _, record in ipairs(list) do
+		Records.AppendOwn(record)
+	end
+end
+
+function Records.Holding()
+	return holding, #held
+end
+
 -- Appends a record to our own journal and tells the other modules.
 function Records.AppendOwn(record)
 	local me = ns.Identity.me
 	if not me.guid then return nil end
+	if holding then
+		held[#held + 1] = record
+		return nil
+	end
 	local author = Records.Author(me.guid)
 	author.own = true
 	record.seq = (author.head or 0) + 1
