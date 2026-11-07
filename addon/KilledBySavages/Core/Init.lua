@@ -125,6 +125,8 @@ local function Status()
 		ns.Print(L.STATUS_NO_GUILD)
 	end
 	ns.Print(me.bnetHash and L.STATUS_PLAYER_KEY_BNET or L.STATUS_PLAYER_KEY_FALLBACK)
+	local imported = me.guid and ns.Db.Character(me.guid).imported
+	if imported then ns.Print(L.IMPORT_ALREADY:format(imported.records or 0)) end
 	local errors = #ns.db.errors
 	ns.Print(errors > 0 and L.STATUS_ERRORS:format(errors) or L.STATUS_NO_ERRORS)
 end
@@ -168,6 +170,7 @@ local function Help()
 	ns.Print(L.HELP_OPEN)
 	ns.Print(L.HELP_STATUS)
 	ns.Print(L.HELP_OPTIONS)
+	ns.Print(L.HELP_IMPORT)
 	ns.Print(L.HELP_DEBUG)
 end
 
@@ -197,6 +200,8 @@ local function HandleSlash(input)
 		ns.OpenOptions()
 	elseif command == "debug" then
 		Debug()
+	elseif command == "import" then
+		ns.Import.Manual()
 	elseif command == "verbose" then
 		ns.db.settings.verbose = not ns.db.settings.verbose
 		ns.Print("verbose " .. (ns.db.settings.verbose and "on" or "off"))

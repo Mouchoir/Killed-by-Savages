@@ -767,6 +767,197 @@ check("packed pages are served and stored elsewhere", (E.db().authors[synthGuid]
 check("the copy reads the same", E.ns.Records.Get(synthGuid, 150) and E.ns.Records.Get(synthGuid, 150).lifeHK == 1150)
 
 --------------------------------------------------------------------------------
+section("Import from the probe")
+--------------------------------------------------------------------------------
+
+-- A member who ran the probe before installing the addon: its file holds
+-- another character's evening too, and must be read by session.
+local F = NewClient({ name = "Fenwick Oakhollow", guid = Guid(7), class = "WARRIOR", guild = "Savages", lifetime = 42, rank = 3 })
+local G = NewClient({ name = "Gaelan Rook", guid = Guid(8), class = "ROGUE", guild = "Savages", lifetime = 10, rank = 3 })
+local H = NewClient({ name = "Hollis Marrow", guid = Guid(9), class = "MAGE", guild = "Savages", lifetime = 35, rank = 3 })
+Mock.SetGuildRoster({ { guid = A.guid, rank = 0 }, { guid = B.guid, rank = 2 }, { guid = C.guid, rank = 4 }, { guid = Guid(5), rank = 3 },
+	{ guid = D.guid, rank = 3 }, { guid = E.guid, rank = 3 }, { guid = F.guid, rank = 3 }, { guid = G.guid, rank = 3 }, { guid = H.guid, rank = 3 } })
+RefreshRosters()
+
+local T = Mock.Server() - 3600
+local function Pos(x, y) return { mapID = 1424, mapName = "Contreforts de Hautebrande", status = "ok", x = x, y = y } end
+local function Facts(h, level)
+	return { kind = "Player", guid = h.guid, name = h.name, class = h.class, race = h.race, factionGuess = "Horde", faction = "Horde", level = level, realm = "" }
+end
+local function Hk(at, t, reason, bucket, lifetime, delta, matched, extra)
+	local entry = { at = at, t = t, reason = reason, bucket = bucket, lifetime = { lifetime, 0, n = 2 }, session = { 0, 0, n = 2 }, secret = false }
+	if delta then entry.lifetimeDelta = delta end
+	if matched then entry.match = matched end
+	for key, value in pairs(extra or {}) do entry[key] = value end
+	return entry
+end
+local OTHER, MINE = "Someone Else-" .. Mock.REALM, "Fenwick Oakhollow-" .. Mock.REALM
+local probe = {
+	schema = 1,
+	me = { guid = F.guid, key = MINE, name = "Fenwick Oakhollow" },
+	guild = { name = "Savages", members = 9 },
+	sessions = {
+		{ at = T - 7200, key = OTHER, version = "0.1.2" },
+		{ at = T, key = MINE, version = "0.1.3" },
+		{ at = T + 1000, key = MINE, version = "0.1.3" },
+	},
+	log = {
+		hk = {
+			-- the other character's evening
+			Hk(T - 7100, 100, "login", "world", 5),
+			Hk(T - 7000, 200, "PLAYER_PVP_KILLS_CHANGED", "world", 6, 1, "kb:me", { pos = Pos(0.1, 0.1) }),
+			-- Fenwick, first session
+			Hk(T + 1, 1000, "login", "world", 30),
+			Hk(T + 100, 1100, "PLAYER_PVP_KILLS_CHANGED", "world", 31, 1, "kb:me", { pos = Pos(0.31, 0.42), zone = "Contreforts de Hautebrande", subzone = "Moulin-de-Tarren" }),
+			Hk(T + 100, 1100.05, "PLAYER_PVP_KILLS_CHANGED", "world", 31, 0),
+			Hk(T + 200, 1200, "PLAYER_PVP_KILLS_CHANGED", "world", 32, 1, "assist:named", { pos = Pos(0.33, 0.44) }),
+			Hk(T + 300, 1300, "PLAYER_PVP_KILLS_CHANGED", "world", 34, 2, "kb:party assist:unseen", { pos = Pos(0.35, 0.46) }),
+			-- second session: one HK came in between, unseen
+			Hk(T + 1000, 2000, "login", "world", 35),
+			Hk(T + 1100, 2100, "enter-bg", "bg", 35, 0),
+			Hk(T + 1200, 2200, "PLAYER_PVP_KILLS_CHANGED", "bg", 36, 1, "kb:secret", { zone = "Vallée d'Alterac", subzone = "Pic de Dun Baldar" }),
+			Hk(T + 1300, 2300, "PLAYER_PVP_KILLS_CHANGED", "bg", 37, 1, "assist:unseen", { zone = "Vallée d'Alterac", subzone = "" }),
+			Hk(T + 1400, 2400, "PLAYER_PVP_KILLS_CHANGED", "bg", 38, 1, "assist:unseen", { zone = "Vallée d'Alterac", subzone = "Cimetière des Stormpike" }),
+			Hk(T + 1600, 2600, "match-complete", "bg", 38, 0),
+			-- a second battleground, left before the end: no scoreboard
+			Hk(T + 2000, 3000, "enter-bg", "bg", 38, 0),
+			Hk(T + 2100, 3100, "PLAYER_PVP_KILLS_CHANGED", "bg", 39, 1, "assist:unseen", { zone = "Goulet des Chanteguerres", subzone = "Fort" }),
+			Hk(T + 2200, 3200, "PLAYER_PVP_KILLS_CHANGED", "bg", 40, 1, "kb:secret", { zone = "Goulet des Chanteguerres", subzone = "Fort" }),
+			Hk(T + 2300, 3300, "left-bg", "world", 40, 0),
+		},
+		kills = {
+			{ at = T - 7000, t = 200, bucket = "world", role = "me", targetKind = "Player", hkMatched = true, hk = "hk", target = Facts(HORDE[5], 30), pos = Pos(0.1, 0.1) },
+			-- a teammate's blow that gave Fenwick no HK: not his kill
+			{ at = T + 50, t = 1050, bucket = "world", role = "party", targetKind = "Player", hk = "nohk", target = Facts(HORDE[6], 28), pos = Pos(0.30, 0.41) },
+			{ at = T + 100, t = 1100, bucket = "world", role = "me", targetKind = "Player", hkMatched = true, hk = "hk", target = Facts(HORDE[1], 27), pos = Pos(0.31, 0.42) },
+			{ at = T + 300, t = 1300, bucket = "world", role = "party", targetKind = "Player", hkMatched = true, hk = "hk", target = Facts(HORDE[3], 25), pos = Pos(0.35, 0.46) },
+			{ at = T + 1200, t = 2200, bucket = "bg", role = "secret", targetKind = "secret", attackerSecret = true, targetSecret = true },
+		},
+		assists = {
+			{ at = T + 200, t = 1200, bucket = "world", how = "named", victim = Facts(HORDE[2], 26), gap = 0.8, pos = Pos(0.33, 0.44) },
+			{ at = T + 300, t = 1300, bucket = "world", how = "unseen", pos = Pos(0.35, 0.46) },
+			{ at = T + 1300, t = 2300, bucket = "bg", how = "unseen" },
+			{ at = T + 1400, t = 2400, bucket = "bg", how = "unseen" },
+			{ at = T + 2100, t = 3100, bucket = "bg", how = "unseen" },
+		},
+		deaths = {
+			-- by a creature: not a PvP death
+			{ at = T + 150, t = 1150, bucket = "world", recapStatus = "ok", killer = { kind = "Creature" }, killerIsPlayer = false, pos = Pos(0.32, 0.43),
+				recap = { { sourceName = "Loup des collines", sourceGUID = "Creature-0-1-2-3-4-5", sourceFlags = 0xa48, spellName = "Morsure" } } },
+			{ at = T + 250, t = 1250, bucket = "world", recapStatus = "ok", killer = Facts(HORDE[4], 29), killerIsPlayer = true, pos = Pos(0.34, 0.45),
+				recap = { { sourceName = HORDE[4].name, sourceGUID = HORDE[4].guid, sourceFlags = 0x548, spellName = "Boule de feu" } } },
+			{ at = T + 350, t = 1350, bucket = "world", recapStatus = "ok", killer = { kind = "Pet" }, killerIsPlayer = false, pos = Pos(0.36, 0.47),
+				recap = { { sourceName = "Crocs", sourceGUID = "Pet-0-1234-1-0000CCC3", sourceFlags = 0x1148, spellName = "Griffure" } } },
+			{ at = T + 1350, t = 2350, bucket = "bg", recapStatus = "ok", killer = Facts(HORDE[6]), killerIsPlayer = true, pos = { mapID = 1459, status = "secret" },
+				context = { bucket = "bg", instanceID = 30, subzone = "Pic de Dun Baldar" },
+				recap = { { sourceName = HORDE[6].name, sourceGUID = HORDE[6].guid, sourceFlags = 0x548, spellName = "Tir des arcanes" } } },
+			-- with no readable recap: dropped
+			{ at = T + 1450, t = 2450, bucket = "bg", recapStatus = "secret", context = { bucket = "bg" } },
+		},
+		matches = {
+			{ how = "active", startedAt = T + 1100, context = { bucket = "bg", instanceID = 30, instanceName = "Vallée d'Alterac" }, during = {} },
+			{ how = "complete", startedAt = T + 1600, completeAt = T + 1600, duration = 480, winner = 1, battlefieldWinner = 1, inactiveAt = T + 1620,
+				atEnd = { bucket = "bg", instanceID = 30, instanceName = "Vallée d'Alterac", subzone = "Pic de Dun Baldar" },
+				mine = { honorableKills = 3, killingBlows = 1, deaths = 1, honorGained = 50, damageDone = 1000, healingDone = 0, name = "Fenwick Oakhollow", guid = F.guid },
+				final = { at = T + 1600, count = 4, readable = 4, secret = 0, rows = {
+					{ name = "Fenwick Oakhollow", guid = F.guid, kb = 1, hk = 3, deaths = 1, honor = 50, faction = 1, class = "WARRIOR", race = "Humain", me = true, guildmate = true },
+					{ name = "Edric Vale", guid = Guid(5), kb = 2, hk = 10, deaths = 0, honor = 90, faction = 1, class = "PALADIN", race = "Humain", guildmate = true },
+					{ name = "Random Ally", guid = Guid(900), kb = 4, hk = 12, deaths = 2, honor = 80, faction = 1, class = "MAGE", race = "Gnome" },
+					{ name = HORDE[1].name, guid = HORDE[1].guid, kb = 5, hk = 9, deaths = 3, honor = 70, faction = 0, class = "WARRIOR", race = "Orc" },
+				} },
+				immediate = { count = 4, readable = 0, secret = 4, rows = {} },
+			},
+			{ how = "active", startedAt = T + 2000, context = { bucket = "bg", instanceID = 489, instanceName = "Goulet des Chanteguerres" }, during = {} },
+		},
+	},
+}
+
+F.probe = probe
+mark = #network.sent
+F.login()
+advance(5)
+local imported = Journal(F)
+local fChar = F.db().characters[F.guid]
+check("the probe's records of this character came in at login", #imported == 16 and F.said("repris de la sonde"), #imported)
+check("the baseline is the count the probe first knew, the lifetime count the server's", fChar.baselineHK == 30 and fChar.lifeHK == 42)
+check("the chain holds from the first record to the counter", F.ns.Records.CheckChain(Journal(F)) == true and Last(F).type == "X" and Last(F).toHK == 42)
+check("the other character's kill stayed out", (function()
+	for _, r in ipairs(imported) do
+		if r.vtail == F.ns.Util.Tail(HORDE[5].guid) then return false end
+	end
+	return true
+end)())
+check("a killing blow keeps its victim and place", imported[1].type == "K" and imported[1].how == "kb" and imported[1].vname == HORDE[1].name
+	and imported[1].vclass == HORDE[1].class and imported[1].vlevel == 27 and imported[1].mapID == 1424 and imported[1].x == 0.31 and imported[1].lifeHK == 31,
+	imported[1].how)
+check("an assist named by the enemy's death keeps it", imported[2].how == "ast" and imported[2].vname == HORDE[2].name and imported[2].lifeHK == 32)
+check("a death keeps its killer and spell", imported[3].type == "D" and imported[3].kkind == "p" and imported[3].kname == HORDE[4].name
+	and imported[3].spell == "Boule de feu" and imported[3].lifeHK == 32)
+check("a teammate's blow is a group kill, the unseen HK a kill with no victim", imported[4].how == "grp" and imported[4].vname == HORDE[3].name
+	and imported[5].how == "unk" and imported[5].vtail == nil and imported[5].lifeHK == 34)
+check("a death to a pet keeps the pet's name", imported[6].type == "D" and imported[6].kkind == "e" and imported[6].kname == "Crocs")
+check("HKs between two sessions are a counter record", imported[7].type == "X" and imported[7].fromHK == 34 and imported[7].toHK == 35)
+check("battleground HKs are kills placed by subzone", imported[8].how == "bg" and imported[8].sub == "Pic de Dun Baldar" and imported[9].sub == nil
+	and imported[11].sub == "Cimetière des Stormpike" and imported[11].lifeHK == 38)
+check("a death in a battleground keeps its subzone", imported[10].type == "D" and imported[10].bucket == "b" and imported[10].kname == HORDE[6].name
+	and imported[10].sub == "Pic de Dun Baldar" and imported[10].mapID == nil)
+local fMatch = imported[12]
+check("the final scoreboard is a match record with the guild teammate's line", fMatch.type == "M" and fMatch.hk == 3 and fMatch.kb == 1 and fMatch.deaths == 1
+	and fMatch.honor == 50 and fMatch.damage == 1000 and fMatch.live == 3 and fMatch.lifeHK == 38 and fMatch.instanceID == 30 and fMatch.duration == 480
+	and #fMatch.lines == 1 and fMatch.lines[1].name == "Edric Vale" and fMatch.lines[1].kb == 2 and fMatch.lines[1].hk == 10, #fMatch.lines)
+check("a battleground left before the end is a match from the counter", imported[15].type == "M" and imported[15].hk == 2 and imported[15].kb == 0
+	and imported[15].live == 2 and imported[15].instanceID == 489 and imported[15].lifeHK == 40)
+local fStats = F.ns.Stats.Character(F.guid, "all", "all")
+local fWanted = Expected(F, "all")
+check("the stats add the imported records up", fStats.kills == 12 and fStats.kb == 2 and fStats.deaths == 3
+	and fStats.kills == fWanted.kills and fStats.kb == fWanted.kb and fStats.deaths == fWanted.deaths, fStats.kills)
+check("they fall in this week", F.ns.Stats.Character(F.guid, "week", "all").kills == 12)
+check("imported records are not broadcast one by one", SentSince(mark, "GUILD", "R") == 0, SentSince(mark, "GUILD", "R"))
+advance(70)
+check("the hello after the import announces the head", SentSince(mark, "GUILD", "H") >= 1 and network.sent[#network.sent] ~= nil)
+advance(120)
+check("a member takes the imported journal by whisper", Held(A, F) == 16, Held(A, F))
+F.logout()
+F.login()
+advance(5)
+check("a second login imports nothing twice", #Journal(F) == 16 and F.counter("import.records") == 16, F.counter("import.records"))
+F.slash("import")
+check("/kbs import says it is done", F.said("Déjà repris"))
+
+-- The probe's file holds nothing of this character: nothing comes in.
+G.probe = { schema = 1, me = { guid = Guid(99) }, sessions = { { at = T, key = OTHER, version = "0.1.3" } }, log = probe.log }
+G.login()
+advance(5)
+check("another character's evening is not imported", #Journal(G) == 0 and G.db().characters[G.guid].imported == nil)
+G.slash("import")
+check("/kbs import says why", G.said("rien pour ce personnage") and G.counter("import.noData") == 1)
+
+-- The probe's count runs past this character's counter: refused whole.
+local wrong = Mock.Roundtrip(probe)
+wrong.me.guid = H.guid
+for _, session in ipairs(wrong.sessions) do
+	if session.key == MINE then session.key = "Hollis Marrow-" .. Mock.REALM end
+end
+H.probe = wrong
+H.login()
+advance(5)
+check("data past the counter is refused, nothing written", #Journal(H) == 0 and H.counter("import.mismatch") == 1
+	and H.db().characters[H.guid].baselineHK == 35)
+H.slash("import")
+check("/kbs import says the counts do not fit", H.said("ne colle pas"))
+
+-- A journal with records takes nothing.
+A.probe = probe
+A.logout()
+A.login()
+advance(5)
+local aHeadBefore = Held(A, A)
+A.slash("import")
+check("a journal that already has records is left alone", Held(A, A) == aHeadBefore and A.said("déjà des enregistrements")
+	and A.db().characters[A.guid].imported == nil)
+A.probe = nil
+
+--------------------------------------------------------------------------------
 section("The window")
 --------------------------------------------------------------------------------
 

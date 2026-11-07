@@ -225,7 +225,7 @@ function Sync.SendHello(reason)
 	local me = Me()
 	if not Identity.InGuild() or not me.tail then return false end
 	local char = Char()
-	if reason ~= "recovery" and Now() - (char.lastHello or 0) < HELLO_MIN_GAP then
+	if reason ~= "recovery" and reason ~= "import" and Now() - (char.lastHello or 0) < HELLO_MIN_GAP then
 		ns.Count("sync.helloSkipped")
 		return false
 	end
@@ -860,8 +860,11 @@ end
 -- Our own records, live
 --------------------------------------------------------------------------------
 
-local function OnOwnRecord(guid, seq, text)
+local function OnOwnRecord(guid, seq, text, _, source)
 	if guid ~= Me().guid or not Identity.InGuild() then return end
+	-- Imported history is not news: the hello that follows announces the
+	-- head and the guild takes the pages by whisper.
+	if source == "import" then return end
 	SendGuild("R", ("R^%s^%d^%s"):format(Me().tail, seq, text), 1)
 	-- A hello once in a while tells everyone our new head.
 	local char = Char()
@@ -957,10 +960,16 @@ local function OnAliasChanged()
 	end
 end
 
+-- History imported after the login hello went out: a new hello says the head.
+local function OnImported()
+	if lastHeadAnnounced ~= nil and Identity.InGuild() then Sync.SendHello("import") end
+end
+
 ns.On("CHAT_MSG_ADDON", OnAddonMessage)
 ns.Hook("Login", OnLogin)
 ns.Hook("AliasChanged", OnAliasChanged)
 ns.Hook("RecordAdded", OnOwnRecord)
+ns.Hook("Imported", OnImported)
 ns.Hook("CounterJump", OnCounterJump)
 ns.Hook("JournalChanged", OnOwnJournalChanged)
 ns.Hook("RosterUpdated", function() Sync.Schedule() end)

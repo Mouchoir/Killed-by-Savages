@@ -306,6 +306,9 @@ function Detect.Start()
 	end
 	started = true
 	lastHK = lifeHK
+	-- A journal still empty takes what the probe recorded before the addon
+	-- existed; it sets the baseline itself.
+	if ns.Import then Util.Guard("import", ns.Import.AtLogin, lifeHK) end
 	-- HKs left unmatched by the last session belong before anything the
 	-- counter did since: they are settled first.
 	ResolvePending()

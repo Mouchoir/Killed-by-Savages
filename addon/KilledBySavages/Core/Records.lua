@@ -482,8 +482,9 @@ function Records.Holding()
 	return holding, #held
 end
 
--- Appends a record to our own journal and tells the other modules.
-function Records.AppendOwn(record)
+-- Appends a record to our own journal and tells the other modules. source
+-- says where it came from when it is not a live event ("import").
+function Records.AppendOwn(record, source)
 	local me = ns.Identity.me
 	if not me.guid then return nil end
 	if holding then
@@ -500,7 +501,7 @@ function Records.AppendOwn(record)
 	author.count = (author.count or 0) + 1
 	author.confirmedHead = record.seq
 	ns.Count("records.own." .. record.type)
-	ns.Fire("RecordAdded", me.guid, record.seq, text, record)
+	ns.Fire("RecordAdded", me.guid, record.seq, text, record, source)
 	return record.seq, text
 end
 

@@ -768,6 +768,8 @@ function Mock.NewClient(spec)
 		-- A test seam: runs once the files are loaded, before any event.
 		if client.onBoot then client.onBoot(client.ns, client.env) end
 		client.env[addon.savedName] = Mock.Roundtrip(client.saved)
+		-- The probe's own SavedVariables, when the test installs some.
+		if client.probe ~= nil then client.env.KBSProbeDB = Mock.Roundtrip(client.probe) end
 		client.fire("ADDON_LOADED", addon.name)
 		client.fire("PLAYER_LOGIN")
 		client.fire("PLAYER_ENTERING_WORLD", true, false)

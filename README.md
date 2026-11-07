@@ -52,10 +52,25 @@ and the chain, and are dropped if the author's own count contradicts them.
 | `/kbs` | Open or close the kill board |
 | `/kbs status` | Where the addon stands on this character |
 | `/kbs options` | Open the options |
+| `/kbs import` | Take the probe's records into this character's journal (see below) |
 | `/kbs debug` | Errors and sync state, for bug reports |
 
 Options: minimap button, chat announcements of guild kills, window scale. The
 display name of a player is set in the Me tab.
+
+## Import from the probe
+
+A character that ran the probe (below) before installing the addon does not
+start from zero: at its first login, if its journal is still empty, the
+addon reads the probe's SavedVariables and turns what they hold for that
+character into its first records, chained by the server's counter like live
+ones: kills with their victim and place, deaths with their killer, each
+battleground's final scoreboard, and counter records for the HKs the probe
+did not see. The probe's file is account-wide; its session list says which
+character was playing when. Nothing is written unless every record
+validates and the chain ends at the counter the server shows now; `/kbs
+import` says why otherwise. The import happens once, and only while the
+journal is empty, so install the addon before the next kill.
 
 ## Install
 
@@ -71,6 +86,8 @@ CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0, LibDeflate.
   files, a fake guild channel links them (GUILD, WHISPER, lockdown, throttle),
   secret values are an object that fails on any read, and every SavedVariables
   write goes through a serializer that refuses what the game could not save.
+  A client given `client.probe = { ... }` logs in with that table as the
+  probe's SavedVariables.
 - Deploy to the game: `scripts\dev.ps1 -Addon KilledBySavages` (or `dev.cmd`).
   Targets come from `-WowAddOnsPath`, the `KBS_WOW_ADDONS_PATH` variable, or
   a gitignored `scripts\dev.local.ps1` setting `$WowAddOnsPaths`. A new addon

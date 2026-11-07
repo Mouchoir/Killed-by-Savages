@@ -20,6 +20,7 @@ local L = {
 	HELP_OPEN = "/kbs - open or close the kill board",
 	HELP_STATUS = "/kbs status - where the addon stands on this character",
 	HELP_OPTIONS = "/kbs options - open the options",
+	HELP_IMPORT = "/kbs import - take the probe's records into this character's journal, once, while it is empty",
 	HELP_DEBUG = "/kbs debug - errors and sync state, for bug reports",
 	STATUS_VERSION = "Version %s, %s on %s.",
 	STATUS_GUILD = "Guild: %s, rank %s%s.",
@@ -32,6 +33,16 @@ local L = {
 	STATUS_WINDOW_SOON = "The kill board window is not in this version yet.",
 	OPTIONS_SOON = "The options page is not available on this client.",
 	DEBUG_HEADER = "Killed by Savages %s, debug",
+
+	-- Import from the probe
+	IMPORT_DONE = "%d records taken from the probe: %d kills, %d deaths, %d battleground matches.",
+	IMPORT_ALREADY = "Already taken from the probe: %d records.",
+	IMPORT_NO_PROBE = "No probe data: KBSProbe is not installed or recorded nothing.",
+	IMPORT_NO_DATA = "The probe has nothing for this character.",
+	IMPORT_NOT_EMPTY = "Import skipped: this character's journal already has records.",
+	IMPORT_MISMATCH = "Import refused: the probe's count (%d) does not fit this character's counter (%d).",
+	IMPORT_INVALID = "Import refused: a probe record does not validate (%s).",
+	IMPORT_NO_COUNTER = "The honorable kills counter is not readable right now; try again later.",
 
 	-- Window
 	TAB_PLAYERS = "Players",
@@ -114,6 +125,7 @@ local translations = {
 		HELP_OPEN = "/kbs - ouvrir ou fermer le tableau de chasse",
 		HELP_STATUS = "/kbs status - où en est l'addon sur ce personnage",
 		HELP_OPTIONS = "/kbs options - ouvrir les options",
+		HELP_IMPORT = "/kbs import - reprendre les enregistrements de la sonde dans le journal de ce personnage, une fois, tant qu'il est vide",
 		HELP_DEBUG = "/kbs debug - erreurs et état de la synchro, pour les rapports de bug",
 		STATUS_VERSION = "Version %s, %s sur %s.",
 		STATUS_GUILD = "Guilde : %s, grade %s%s.",
@@ -125,6 +137,15 @@ local translations = {
 		STATUS_NO_ERRORS = "Aucune erreur enregistrée.",
 		STATUS_WINDOW_SOON = "La fenêtre du tableau de chasse n'est pas encore dans cette version.",
 		OPTIONS_SOON = "La page d'options n'est pas disponible sur ce client.",
+
+		IMPORT_DONE = "%d enregistrements repris de la sonde : %d kills, %d morts, %d matchs de champ de bataille.",
+		IMPORT_ALREADY = "Déjà repris de la sonde : %d enregistrements.",
+		IMPORT_NO_PROBE = "Aucune donnée de sonde : KBSProbe n'est pas installée ou n'a rien enregistré.",
+		IMPORT_NO_DATA = "La sonde n'a rien pour ce personnage.",
+		IMPORT_NOT_EMPTY = "Reprise ignorée : le journal de ce personnage a déjà des enregistrements.",
+		IMPORT_MISMATCH = "Reprise refusée : le compte de la sonde (%d) ne colle pas au compteur de ce personnage (%d).",
+		IMPORT_INVALID = "Reprise refusée : un enregistrement de la sonde n'est pas valide (%s).",
+		IMPORT_NO_COUNTER = "Le compteur de victoires honorables n'est pas lisible pour l'instant ; réessaie plus tard.",
 
 		TAB_PLAYERS = "Joueurs",
 		TAB_CHARACTERS = "Personnages",

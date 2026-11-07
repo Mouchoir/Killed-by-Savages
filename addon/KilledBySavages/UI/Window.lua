@@ -271,7 +271,11 @@ local function RefreshBand()
 	bar.text:SetText(L.MILESTONE_FORMAT:format(milestone.distinct, milestone.next))
 	frame.band.periods:Select(state.period)
 	frame.band.buckets:Select(state.bucket)
+	-- The guild's name follows the title, unless the title already says it.
 	local guildName = ns.Identity.me.guild
+	if type(guildName) ~= "string" or guildName == "" or L.ADDON_NAME:lower():find(guildName:lower(), 1, true) then
+		guildName = nil
+	end
 	frame.title:SetText(L.ADDON_NAME .. (guildName and (" |cff998866" .. guildName .. "|r") or ""))
 end
 
