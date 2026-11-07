@@ -26,9 +26,11 @@ ns.Import = Import
 
 local PROBE_SECRET = "<secret>"   -- how the probe wrote a value it could not read
 local MATCH_WINDOW = 4            -- seconds between an HK entry and the kill it matched
+local CLOCK_WINDOW = 2            -- the same on the precise clock, the probe's own rule
 local MATCH_MARGIN = 120          -- seconds before a match's start that still belong to it
 local RUN_GAP = 1800              -- battleground HKs closer than this share a fallback match
 local HOW_BY_ROLE = { me = "kb", mypet = "pet", party = "grp", partypet = "grp", raid = "grp", raidpet = "grp" }
+local ROLE_RANK = { me = 1, mypet = 2, party = 3, partypet = 3, raid = 3, raidpet = 3 }
 local BUCKET = { world = "w", bg = "b" }
 
 --------------------------------------------------------------------------------
@@ -163,14 +165,97 @@ local function TakeAssist(assists, hk, used)
 	return nil
 end
 
+-- The results the probe wrote for a counter move, one per HK: "kb:<role>",
+-- "assist:named", "assist:unseen" or "assist:ambiguous".
 local function Results(hk)
 	local results = {}
 	for result in tostring(hk.match or ""):gmatch("%S+") do results[#results + 1] = result end
 	return results
 end
 
--- One kill record for the index-th HK of a live counter move.
-local function KillRecord(hk, bucket, result, rings, used, guild)
+--------------------------------------------------------------------------------
+-- Probes before 0.1.3 logged the counter moves, the killing blows and the
+-- deaths around us without matching them. For their entries the import
+-- applies the probe's own rule on what the rings kept: a killing blow by us
+-- or our group within the window (ours first, then our pet's, then the
+-- group's), else an enemy player who died near us, only when no more of them
+-- died than HKs came; the rest stays a kill with no victim.
+--------------------------------------------------------------------------------
+
+-- Whether a logged event sits within the match window of a counter move.
+local function Near(item, hk)
+	if type(item) ~= "table" or type(item.at) ~= "number" or math.abs(item.at - hk.at) > MATCH_WINDOW then
+		return false
+	end
+	if type(item.t) == "number" and type(hk.t) == "number" then
+		return math.abs(item.t - hk.t) <= CLOCK_WINDOW
+	end
+	return true
+end
+
+local function Gap(item, hk)
+	if type(item.t) == "number" and type(hk.t) == "number" then return math.abs(item.t - hk.t) end
+	return math.abs(item.at - hk.at)
+end
+
+-- A player death our HK may come from: an enemy, or one whose faction the
+-- probe could not tell. Only enemies give HKs.
+local function IsEnemyDeath(death)
+	local facts = Tbl(death.target)
+	if not facts or facts.kind ~= "Player" or Str(facts.guid) == nil or facts.guid == Identity.me.guid then
+		return false
+	end
+	local faction = Identity.FactionOf(facts)
+	return faction == nil or faction == Identity.me.enemyFaction
+end
+
+-- Results like the probe's for a move it did not match, and the logged
+-- event each one came from.
+local function LegacyResults(hk, count, rings, used)
+	local results, picks = {}, {}
+	local killed, kills = {}, {}
+	for _, kill in ipairs(rings.kills) do
+		if Near(kill, hk) and kill.targetKind == "Player" then
+			local facts = Tbl(kill.target)
+			if facts and Str(facts.guid) then killed[facts.guid] = true end
+			if not used[kill] and HOW_BY_ROLE[kill.role] then kills[#kills + 1] = kill end
+		end
+	end
+	table.sort(kills, function(a, b)
+		local rankA, rankB = ROLE_RANK[a.role] or 4, ROLE_RANK[b.role] or 4
+		if rankA ~= rankB then return rankA < rankB end
+		return Gap(a, hk) < Gap(b, hk)
+	end)
+	for index = 1, math.min(count, #kills) do
+		local kill = kills[index]
+		used[kill] = true
+		results[index] = "kb:" .. tostring(kill.role)
+		picks[index] = kill
+	end
+	local left = count - #results
+	if left > 0 then
+		local deaths = {}
+		for _, death in ipairs(rings.unitDied) do
+			if Near(death, hk) and not used[death] and IsEnemyDeath(death) and not killed[death.target.guid] then
+				deaths[#deaths + 1] = death
+			end
+		end
+		-- More enemies died than HKs came: none is guessed.
+		if #deaths <= left then
+			for _, death in ipairs(deaths) do
+				used[death] = true
+				local index = #results + 1
+				results[index] = "assist:named"
+				picks[index] = death
+			end
+		end
+	end
+	return results, picks
+end
+
+-- One kill record for the index-th HK of a live counter move. `pick` is the
+-- logged event the import matched itself, for a probe that did not.
+local function KillRecord(hk, bucket, result, pick, rings, used, guild)
 	local record = { type = "K", t = hk.at, bucket = bucket, guild = guild }
 	if bucket == "b" then
 		-- Enemies are secret in a battleground: the HK is placed by subzone.
@@ -180,12 +265,12 @@ local function KillRecord(hk, bucket, result, rings, used, guild)
 	end
 	local role = result and result:match("^kb:(%S+)$")
 	local how = role and HOW_BY_ROLE[role] or nil
-	local kill = how and TakeKill(rings.kills, hk, role, used) or nil
+	local kill = how and (pick or TakeKill(rings.kills, hk, role, used)) or nil
 	local facts = kill and VictimFields(kill.target) or nil
 	local pos = kill and kill.pos or nil
 	if not facts and result == "assist:named" then
-		local assist = TakeAssist(rings.assists, hk, used)
-		facts = assist and VictimFields(assist.victim) or nil
+		local assist = pick or TakeAssist(rings.assists, hk, used)
+		facts = assist and VictimFields(assist.victim or assist.target) or nil
 		pos = assist and assist.pos or nil
 		how = "ast"
 	end
@@ -295,7 +380,7 @@ local function Build(probe, mine, guild)
 	local log = Tbl(probe.log) or {}
 	local rings = {
 		hk = Tbl(log.hk) or {}, kills = Tbl(log.kills) or {}, assists = Tbl(log.assists) or {},
-		deaths = Tbl(log.deaths) or {}, matches = Tbl(log.matches) or {},
+		unitDied = Tbl(log.unitDied) or {}, deaths = Tbl(log.deaths) or {}, matches = Tbl(log.matches) or {},
 	}
 	local used = {}
 	local events = {}
@@ -326,9 +411,12 @@ local function Build(probe, mine, guild)
 				if delta > 0 then
 					local bucket = BUCKET[hk.bucket]
 					if hk.reason == "PLAYER_PVP_KILLS_CHANGED" and bucket then
-						local results = Results(hk)
+						local results, picks = Results(hk), nil
+						if hk.match == nil and bucket == "w" then
+							results, picks = LegacyResults(hk, delta, rings, used)
+						end
 						for index = 1, delta do
-							local record = KillRecord(hk, bucket, results[index], rings, used, guild)
+							local record = KillRecord(hk, bucket, results[index], picks and picks[index], rings, used, guild)
 							record.lifeHK = before + index
 							Add(hk.at, record)
 						end

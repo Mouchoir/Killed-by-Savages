@@ -775,8 +775,10 @@ section("Import from the probe")
 local F = NewClient({ name = "Fenwick Oakhollow", guid = Guid(7), class = "WARRIOR", guild = "Savages", lifetime = 42, rank = 3 })
 local G = NewClient({ name = "Gaelan Rook", guid = Guid(8), class = "ROGUE", guild = "Savages", lifetime = 10, rank = 3 })
 local H = NewClient({ name = "Hollis Marrow", guid = Guid(9), class = "MAGE", guild = "Savages", lifetime = 35, rank = 3 })
+local I = NewClient({ name = "Isolde Thorne", guid = Guid(10), class = "HUNTER", guild = "Savages", lifetime = 26, rank = 3 })
 Mock.SetGuildRoster({ { guid = A.guid, rank = 0 }, { guid = B.guid, rank = 2 }, { guid = C.guid, rank = 4 }, { guid = Guid(5), rank = 3 },
-	{ guid = D.guid, rank = 3 }, { guid = E.guid, rank = 3 }, { guid = F.guid, rank = 3 }, { guid = G.guid, rank = 3 }, { guid = H.guid, rank = 3 } })
+	{ guid = D.guid, rank = 3 }, { guid = E.guid, rank = 3 }, { guid = F.guid, rank = 3 }, { guid = G.guid, rank = 3 }, { guid = H.guid, rank = 3 },
+	{ guid = I.guid, rank = 3 } })
 RefreshRosters()
 
 local T = Mock.Server() - 3600
@@ -956,6 +958,71 @@ A.slash("import")
 check("a journal that already has records is left alone", Held(A, A) == aHeadBefore and A.said("déjà des enregistrements")
 	and A.db().characters[A.guid].imported == nil)
 A.probe = nil
+
+-- A member whose probe was older than 0.1.3: its file matched nothing, has
+-- no assists ring and no place or subzone on the HKs. The import matches
+-- them itself, by the probe's rule, from the blows and the deaths it kept.
+local OLD = "Isolde Thorne-" .. Mock.REALM
+local function Died(at, t, facts)
+	return { at = at, t = t, bucket = "world", target = facts, zone = "Contreforts de Hautebrande", subzone = "Moulin-de-Tarren" }
+end
+I.probe = {
+	schema = 1,
+	me = { guid = I.guid, key = OLD, name = "Isolde Thorne" },
+	guild = { name = "Savages", members = 10 },
+	sessions = { { at = T, key = OLD, version = "0.1.2" } },
+	log = {
+		hk = {
+			Hk(T + 1, 1000, "login", "world", 20),
+			Hk(T + 100, 1100, "PLAYER_PVP_KILLS_CHANGED", "world", 21, 1),
+			Hk(T + 200, 1200, "PLAYER_PVP_KILLS_CHANGED", "world", 22, 1),
+			Hk(T + 300, 1300, "PLAYER_PVP_KILLS_CHANGED", "world", 23, 1),
+			Hk(T + 400, 1400, "PLAYER_PVP_KILLS_CHANGED", "world", 25, 2),
+			Hk(T + 1000, 2000, "enter-bg", "bg", 25, 0),
+			Hk(T + 1100, 2100, "PLAYER_PVP_KILLS_CHANGED", "bg", 26, 1),
+			Hk(T + 1200, 2200, "left-bg", "world", 26, 0),
+		},
+		kills = {
+			{ at = T + 100, t = 1099.5, bucket = "world", role = "me", targetKind = "Player", target = Facts(HORDE[1], 27), pos = Pos(0.41, 0.52) },
+			{ at = T + 400, t = 1399.6, bucket = "world", role = "party", targetKind = "Player", target = Facts(HORDE[5], 30), pos = Pos(0.45, 0.56) },
+			{ at = T + 1100, t = 2100, bucket = "bg", role = "secret", targetKind = "secret", attackerSecret = true, targetSecret = true },
+		},
+		unitDied = {
+			-- the blow's own victim
+			Died(T + 100, 1099.5, Facts(HORDE[1], 27)),
+			-- alone next to an HK with no blow: names the assist
+			Died(T + 200, 1199.2, Facts(HORDE[2], 26)),
+			-- an ally who died at the same moment: never a candidate
+			Died(T + 200, 1199.4, { kind = "Player", guid = Guid(5), name = "Edric Vale", class = "PALADIN", race = "Humain", faction = "Alliance", factionGuess = "Alliance" }),
+			-- two enemies for one HK: nobody is guessed
+			Died(T + 300, 1299.5, Facts(HORDE[3], 25)),
+			Died(T + 300, 1299.8, Facts(HORDE[4], 29)),
+			-- a move of two: one explained by the group's blow, the other by the enemy who died with him
+			Died(T + 400, 1399.6, Facts(HORDE[5], 30)),
+			Died(T + 400, 1399.9, Facts(HORDE[6], 28)),
+		},
+		deaths = {},
+		matches = {
+			{ how = "active", startedAt = T + 1000, context = { bucket = "bg", instanceID = 489, instanceName = "Goulet des Chanteguerres" }, during = {} },
+		},
+	},
+}
+I.login()
+advance(5)
+local legacy = Journal(I)
+check("an older probe's file is matched by the import itself", #legacy == 7 and I.said("repris de la sonde")
+	and I.ns.Records.CheckChain(Journal(I)) == true, #legacy)
+check("its killing blow keeps the victim and the blow's place", legacy[1].how == "kb" and legacy[1].vname == HORDE[1].name and legacy[1].vlevel == 27
+	and legacy[1].mapID == 1424 and legacy[1].x == 0.41 and legacy[1].lifeHK == 21, legacy[1].how)
+check("an enemy who died alone next to an HK names the assist, an ally never does", legacy[2].how == "ast" and legacy[2].vname == HORDE[2].name
+	and legacy[2].mapID == nil and legacy[2].lifeHK == 22, legacy[2].how)
+check("two enemies dead for one HK name nobody", legacy[3].how == "unk" and legacy[3].vtail == nil and legacy[3].lifeHK == 23, legacy[3].how)
+check("a move of two: the group's blow, then the other enemy who died", legacy[4].how == "grp" and legacy[4].vname == HORDE[5].name
+	and legacy[5].how == "ast" and legacy[5].vname == HORDE[6].name and legacy[5].lifeHK == 25, tostring(legacy[4].how) .. "/" .. tostring(legacy[5].how))
+check("its battleground HK has no subzone to keep, and its match comes from the counter", legacy[6].how == "bg" and legacy[6].sub == nil
+	and legacy[6].lifeHK == 26 and legacy[7].type == "M" and legacy[7].hk == 1 and legacy[7].instanceID == 489, legacy[6].how)
+local iStats = I.ns.Stats.Character(I.guid, "all", "all")
+check("the stats add them up", iStats.kills == 6 and iStats.kb == 1 and iStats.deaths == 0 and iStats.kills == Expected(I, "all").kills, iStats.kills)
 
 --------------------------------------------------------------------------------
 section("The window")

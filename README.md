@@ -67,7 +67,9 @@ character into its first records, chained by the server's counter like live
 ones: kills with their victim and place, deaths with their killer, each
 battleground's final scoreboard, and counter records for the HKs the probe
 did not see. The probe's file is account-wide; its session list says which
-character was playing when. Nothing is written unless every record
+character was playing when. A file left by a probe older than 0.1.3, which
+did not match HKs with the blows and deaths around them, is matched by the
+import itself with the same rule. Nothing is written unless every record
 validates and the chain ends at the counter the server shows now; `/kbs
 import` says why otherwise. The import happens once, and only while the
 journal is empty, so install the addon before the next kill.
