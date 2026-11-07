@@ -14,6 +14,11 @@ local _, ns = ...
 --
 -- Nothing is written unless every record validates and the chain reaches
 -- the counter the server shows now.
+--
+-- A journal that already has records (the probe was gone when the addon
+-- first ran) takes what the probe kept from before the addon's first count
+-- as backfill instead: appended after the head, each record at its own
+-- time, outside the chain, which that first count already covered.
 --------------------------------------------------------------------------------
 
 local Util = ns.Util
@@ -488,6 +493,81 @@ end
 -- The import itself
 --------------------------------------------------------------------------------
 
+-- When the addon first counted on this character: what the probe kept
+-- before that is the backfill. The character entry is created at the first
+-- login; the first own record is the fallback.
+local function AddonStart(author)
+	local char = ns.Db.Character(Identity.me.guid)
+	local since = char.createdAt
+	if type(since) ~= "number" then
+		Records.Each(Identity.me.guid, function(record)
+			if type(record.t) == "number" and (since == nil or record.t < since) then since = record.t end
+		end)
+	end
+	if type(since) ~= "number" then since = Util.Now() end
+	return since, author
+end
+
+-- Appends what the probe kept from before the addon's first count to a
+-- journal that already has records. Kills and matches become backfill
+-- records: placed at their own time, with their victim or scoreboard,
+-- outside the chain; deaths come as they are. The count the addon started
+-- from bounds it all: a kill the probe numbered past that count did not
+-- happen before the addon.
+local function Backfill(events, author)
+	local me = Identity.me
+	local char = ns.Db.Character(me.guid)
+	local baseline = char.baselineHK
+	if type(baseline) ~= "number" then return "noCounter" end
+	local since = AddonStart(author)
+	local head = Records.Get(me.guid, author.head)
+	local running = head and Records.LifeAfter(head) or char.lifeHK
+	if type(running) ~= "number" then return "noCounter" end
+	local now = Util.Now()
+	local list, decoded = {}, {}
+	for _, event in ipairs(events) do
+		local record = event.record
+		if event.at < since and record.type ~= "X" then
+			if record.type == "K" then
+				if record.lifeHK > baseline then return "mismatch", record.lifeHK, baseline end
+				record.backfill = true
+			elseif record.type == "M" then
+				record.backfill = true
+			end
+			record.lifeHK = running
+			record.seq = author.head + #list + 1
+			local text = Records.Encode(record)
+			local copy = text and Records.Decode(text)
+			if not copy then return "invalid", tostring(record.type) .. ":encode" end
+			local ok, why = Records.Validate(copy, now)
+			if not ok then return "invalid", tostring(record.type) .. ":" .. tostring(why) end
+			list[#list + 1], decoded[#decoded + 1] = record, copy
+		end
+	end
+	if #list == 0 then return "noData" end
+	if head then decoded[#decoded + 1] = head end
+	local chained, breakAt = Records.CheckChain(decoded)
+	if not chained then return "invalid", "chain:" .. tostring(breakAt) end
+
+	local counts = { records = 0, kills = 0, deaths = 0, matches = 0, backfill = true }
+	for _, record in ipairs(list) do
+		record.seq = nil
+		if Records.AppendOwn(record, "import") then
+			counts.records = counts.records + 1
+			if record.type == "K" then counts.kills = counts.kills + 1 end
+			if record.type == "D" then counts.deaths = counts.deaths + 1 end
+			if record.type == "M" then counts.matches = counts.matches + 1 end
+		end
+	end
+	char.imported = {
+		at = now, records = counts.records, kills = counts.kills, deaths = counts.deaths, matches = counts.matches, backfill = true,
+	}
+	ns.Count("import.backfill", counts.records)
+	Records.OwnProfile()
+	ns.Fire("Imported", counts)
+	return "done", counts
+end
+
 -- Turns the probe's data for this character into its journal. current is the
 -- lifetime count the server shows now. Returns a status and details:
 -- "done" with the counts, or why nothing was written.
@@ -495,7 +575,7 @@ function Import.FromProbe(probe, current)
 	local me = Identity.me
 	if not me.guid then return "noData" end
 	local author = ns.db.authors[me.guid]
-	if author and (author.head or 0) > 0 then return "notEmpty" end
+	local filled = author ~= nil and (author.head or 0) > 0
 	if type(probe) ~= "table" then return "noProbe" end
 	if Records.Holding() or #ns.db.pending > 0 then return "later" end
 	if type(current) ~= "number" then return "noCounter" end
@@ -506,6 +586,7 @@ function Import.FromProbe(probe, current)
 	local events, start, last = Build(probe, mine, guild)
 	if not events then return "invalid", tostring(start) end
 	if #events == 0 or start == nil then return "noData" end
+	if filled then return Backfill(events, author) end
 	if last > current then return "mismatch", last, current end
 	if current > last then
 		-- Between the probe's last look and now: counted, not placed.
@@ -560,16 +641,18 @@ end
 
 local function Report(manual, status, a, b)
 	if status == "done" then
-		ns.Print(L.IMPORT_DONE:format(a.records, a.kills, a.deaths, a.matches))
+		if a.backfill then
+			ns.Print(L.IMPORT_BACKFILL_DONE:format(a.kills, a.deaths, a.matches))
+		else
+			ns.Print(L.IMPORT_DONE:format(a.records, a.kills, a.deaths, a.matches))
+		end
 		return
 	end
 	-- Data that was there but could not be taken is worth a line in /kbs
 	-- debug; having nothing to take is the usual case and stays quiet.
 	if manual or status == "mismatch" or status == "invalid" then ns.Count("import." .. tostring(status)) end
 	if not manual then return end
-	if status == "notEmpty" then
-		ns.Print(L.IMPORT_NOT_EMPTY)
-	elseif status == "noProbe" then
+	if status == "noProbe" then
 		ns.Print(L.IMPORT_NO_PROBE)
 	elseif status == "noData" then
 		ns.Print(L.IMPORT_NO_DATA)
@@ -604,6 +687,7 @@ ns.Hook("Debug", function()
 	local char = Identity.me.guid and ns.Db.Character(Identity.me.guid) or nil
 	local imported = char and char.imported
 	if imported then
-		ns.Print(("import: %d records from the probe at %s"):format(imported.records or 0, Util.Stamp(imported.at, true)))
+		ns.Print(("import: %d records from the probe at %s%s"):format(imported.records or 0, Util.Stamp(imported.at, true),
+			imported.backfill and " (backfill)" or ""))
 	end
 end)

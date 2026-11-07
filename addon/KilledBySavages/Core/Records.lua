@@ -10,8 +10,15 @@ local _, ns = ...
 -- client ignores record types and versions it does not know.
 --
 --   K1  kill      seq;t;bucket;how;vtail;vname;vclass;vrace;vlevel;mapID;x;y;guild;lifeHK;sub
+--   B1  backfill  the same fields: a kill the character's probe saw before
+--                 the addon's first count (see Import), counted like a kill
+--                 at its own time, but outside the chain: lifeHK repeats the
+--                 record before it, since the count the addon started from
+--                 already held this HK
 --   D1  death     seq;t;bucket;ktail;kname;kclass;krace;kkind;spell;mapID;x;y;lifeHK;sub
 --   M1  match     seq;t;instanceID;duration;winner;hk;kb;deaths;honor;damage;healing;lifeHK;live;mapID;lines
+--   C1  backfill  the same fields: a match the probe saw before the addon's
+--                 first count, credited like a match, outside the chain
 --   X1  counter   seq;t;bucket;fromHK;toHK            (HKs the server counted with no detail)
 --   P1  profile   name;class;race;realm;playerKey;alias;level;baselineHK;lifeHK;version
 --
@@ -79,7 +86,7 @@ end
 --------------------------------------------------------------------------------
 
 function Records.EncodeKill(r)
-	return Join("K1", r.seq, r.t, r.bucket, r.how, r.vtail, r.vname, r.vclass, r.vrace, r.vlevel,
+	return Join(r.backfill and "B1" or "K1", r.seq, r.t, r.bucket, r.how, r.vtail, r.vname, r.vclass, r.vrace, r.vlevel,
 		r.mapID, r.x, r.y, r.guild, r.lifeHK, r.sub)
 end
 
@@ -114,7 +121,7 @@ function Records.EncodeMatch(r)
 		if index > Records.MAX_LINES then break end
 		lines[#lines + 1] = EncodeLine(line)
 	end
-	return Join("M1", r.seq, r.t, r.instanceID, r.duration, r.winner, r.hk, r.kb, r.deaths, r.honor, r.damage, r.healing,
+	return Join(r.backfill and "C1" or "M1", r.seq, r.t, r.instanceID, r.duration, r.winner, r.hk, r.kb, r.deaths, r.honor, r.damage, r.healing,
 		r.lifeHK, r.live, r.mapID) .. ";" .. table.concat(lines, ",")
 end
 
@@ -140,9 +147,9 @@ end
 
 local function DecodeFields(f)
 	local kind = f[1]
-	if kind == "K1" then
+	if kind == "K1" or kind == "B1" then
 		return {
-			type = "K", seq = Num(f[2]), t = Num(f[3]), bucket = Str(f[4]), how = Str(f[5]),
+			type = "K", backfill = kind == "B1" or nil, seq = Num(f[2]), t = Num(f[3]), bucket = Str(f[4]), how = Str(f[5]),
 			vtail = Str(f[6]), vname = Str(f[7]), vclass = Str(f[8]), vrace = Str(f[9]), vlevel = Num(f[10]),
 			mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), guild = Str(f[14]), lifeHK = Num(f[15]), sub = Str(f[16]),
 		}
@@ -152,9 +159,9 @@ local function DecodeFields(f)
 			ktail = Str(f[5]), kname = Str(f[6]), kclass = Str(f[7]), krace = Str(f[8]), kkind = Str(f[9]),
 			spell = Str(f[10]), mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), lifeHK = Num(f[14]), sub = Str(f[15]),
 		}
-	elseif kind == "M1" then
+	elseif kind == "M1" or kind == "C1" then
 		return {
-			type = "M", seq = Num(f[2]), t = Num(f[3]), bucket = "b", instanceID = Num(f[4]), duration = Num(f[5]),
+			type = "M", backfill = kind == "C1" or nil, seq = Num(f[2]), t = Num(f[3]), bucket = "b", instanceID = Num(f[4]), duration = Num(f[5]),
 			winner = Num(f[6]), hk = Num(f[7]) or 0, kb = Num(f[8]) or 0, deaths = Num(f[9]) or 0, honor = Num(f[10]),
 			damage = Num(f[11]), healing = Num(f[12]), lifeHK = Num(f[13]), live = Num(f[14]) or 0, mapID = Num(f[15]),
 			lines = DecodeLines(f[16]),
@@ -240,8 +247,10 @@ function Records.Validate(r, now)
 end
 
 -- How many HKs a record adds to the author's lifetime count. A match adds
--- only the HKs not already recorded live during it.
+-- only the HKs not already recorded live during it; a backfill kill adds
+-- none, the count the addon started from already had it.
 function Records.Gain(r)
+	if r.backfill then return 0 end
 	if r.type == "K" then return 1 end
 	if r.type == "M" then return math.max(0, (r.hk or 0) - (r.live or 0)) end
 	if r.type == "X" then return r.toHK - r.fromHK end

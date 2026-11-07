@@ -576,7 +576,7 @@ local function StorePage(sender, tail, page, text)
 	local guid = GuidOf(tail)
 	local author = Records.Author(guid)
 	local fromAuthor = (Identity.Member(sender) or {}).tail == tail
-	local records = {}
+	local records, unknown = {}, {}
 	local profile
 	for line in (text .. "\n"):gmatch("(.-)\n") do
 		if line:sub(1, 2) == "P1" then
@@ -593,6 +593,15 @@ local function StorePage(sender, tail, page, text)
 						author.rejected = author.rejected or {}
 						author.rejected[record.seq] = true
 					end
+				end
+			else
+				-- A record of a kind this version does not know: kept as text,
+				-- so a later version reads it and the journal shows no hole to
+				-- fetch again. Outside the chain, like a gap.
+				local seq = tonumber(line:match("^%u%d+;(%d+);"))
+				if seq then
+					unknown[#unknown + 1] = { seq = seq, text = line }
+					ns.Count("sync.unknownKept")
 				end
 			end
 		end
@@ -613,20 +622,20 @@ local function StorePage(sender, tail, page, text)
 		return false
 	end
 	local added = 0
-	for _, item in ipairs(records) do
-		local record = item.record
-		if record.seq >= from and record.seq <= to then
-			local confirmed = author.confirmedHead
-			if confirmed and record.seq > confirmed and not fromAuthor then
-				-- Above what the author announced: kept, marked, purged later
-				-- if the author's next hello contradicts it.
-				author.provisional = author.provisional or {}
-				author.provisional[record.seq] = true
-			end
-			local stored = Records.Store(guid, record.seq, item.text, fromAuthor and "author" or "page")
-			if stored then added = added + 1 end
+	local function Keep(seq, line)
+		if seq < from or seq > to then return end
+		local confirmed = author.confirmedHead
+		if confirmed and seq > confirmed and not fromAuthor then
+			-- Above what the author announced: kept, marked, purged later
+			-- if the author's next hello contradicts it.
+			author.provisional = author.provisional or {}
+			author.provisional[seq] = true
 		end
+		local stored = Records.Store(guid, seq, line, fromAuthor and "author" or "page")
+		if stored then added = added + 1 end
 	end
+	for _, item in ipairs(records) do Keep(item.record.seq, item.text) end
+	for _, item in ipairs(unknown) do Keep(item.seq, item.text) end
 	if profile and (not author.profile or fromAuthor) then
 		author.profile = profile
 		author.profileVerified = fromAuthor or nil

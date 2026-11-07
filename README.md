@@ -77,8 +77,17 @@ character was playing when. A file left by a probe older than 0.1.3, which
 did not match HKs with the blows and deaths around them, is matched by the
 import itself with the same rule. Nothing is written unless every record
 validates and the chain ends at the counter the server shows now; `/kbs
-import` says why otherwise. The import happens once, and only while the
-journal is empty, so install the addon before the next kill.
+import` says why otherwise. The import happens once.
+
+A journal that already has records, because the probe folder was gone when
+the addon first ran, takes the probe's data from before the addon's first
+count as backfill: kills appended after the head as `B1` records, each at
+its own time with its victim, matches as `C1` records with their
+scoreboard, both outside the counter chain (that first count already held
+them), deaths as they are. The "before the addon" count shown in the
+tooltips and `/kbs status` shrinks by the kills placed in the world and the
+HKs of the matches placed. Put the probe folder back, keep its
+SavedVariables, log in: the backfill runs on its own.
 
 ## Install
 

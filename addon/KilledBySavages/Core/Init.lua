@@ -128,7 +128,7 @@ local function Status()
 	if ns.Sync and ns.UI and ns.UI.SyncText then ns.Print(ns.UI.SyncText(ns.Sync.Status())) end
 	local imported = me.guid and ns.Db.Character(me.guid).imported
 	if imported then ns.Print(L.IMPORT_ALREADY:format(imported.records or 0)) end
-	local before = me.guid and ns.Db.Character(me.guid).baselineHK
+	local before = me.guid and ns.Stats and ns.Stats.AuthorInfo(me.guid).before
 	if type(before) == "number" and before > 0 then ns.Print(L.STATUS_BEFORE_ADDON:format(before)) end
 	local errors = #ns.db.errors
 	ns.Print(errors > 0 and L.STATUS_ERRORS:format(errors) or L.STATUS_NO_ERRORS)

@@ -962,16 +962,102 @@ check("data past the counter is refused, nothing written", #Journal(H) == 0 and 
 H.slash("import")
 check("/kbs import says the counts do not fit", H.said("ne colle pas"))
 
--- A journal with records takes nothing.
+-- A journal with records and a probe file of someone else: nothing to take.
 A.probe = probe
 A.logout()
 A.login()
 advance(5)
 local aHeadBefore = Held(A, A)
 A.slash("import")
-check("a journal that already has records is left alone", Held(A, A) == aHeadBefore and A.said("déjà des enregistrements")
-	and A.db().characters[A.guid].imported == nil)
+check("a journal that already has records takes nothing from another character's probe", Held(A, A) == aHeadBefore
+	and A.said("rien pour ce personnage") and A.db().characters[A.guid].imported == nil)
 A.probe = nil
+
+-- A member whose probe folder was gone when the addon first ran: its
+-- journal has records by the time the probe's file is read again. What the
+-- probe kept from before the addon's first count comes in as backfill,
+-- appended after the head, outside the chain.
+local J = NewClient({ name = "Jorund Blackbriar", guid = Guid(11), class = "PALADIN", guild = "Savages", lifetime = 40, rank = 3 })
+local K = NewClient({ name = "Kestrel Vane", guid = Guid(12), class = "MAGE", guild = "Savages", lifetime = 35, rank = 3 })
+Mock.SetGuildRoster({ { guid = A.guid, rank = 0 }, { guid = B.guid, rank = 2 }, { guid = C.guid, rank = 4 }, { guid = Guid(5), rank = 3 },
+	{ guid = D.guid, rank = 3 }, { guid = E.guid, rank = 3 }, { guid = F.guid, rank = 3 }, { guid = G.guid, rank = 3 }, { guid = H.guid, rank = 3 },
+	{ guid = I.guid, rank = 3 }, { guid = J.guid, rank = 3 }, { guid = K.guid, rank = 3 } })
+RefreshRosters()
+advance(1800)
+J.login()
+advance(20)
+J.state.target = HORDE[2].guid
+J.fire("PARTY_KILL", J.guid, HORDE[2].guid)
+J.fire("UNIT_DIED", HORDE[2].guid)
+GainHK(J)
+advance(5)
+check("the addon started on this character from the server's count", #Journal(J) == 1 and J.db().characters[J.guid].baselineHK == 40
+	and Last(J).lifeHK == 41, #Journal(J))
+J.logout()
+local function ProbeOf(client, key)
+	local copy = Mock.Roundtrip(probe)
+	copy.me.guid = client.guid
+	for _, session in ipairs(copy.sessions) do
+		if session.key == MINE then session.key = key end
+	end
+	return copy
+end
+J.probe = ProbeOf(J, "Jorund Blackbriar-" .. Mock.REALM)
+mark = #network.sent
+J.login()
+advance(5)
+local jRecords = Journal(J)
+check("the probe's data from before the addon came in as backfill", #jRecords == 15 and J.said("d'avant l'addon repris")
+	and J.counter("import.backfill") == 14, #jRecords)
+check("kills are backfill records at their own time, outside the chain", jRecords[2].type == "K" and jRecords[2].backfill == true
+	and jRecords[2].how == "kb" and jRecords[2].vname == HORDE[1].name and jRecords[2].t < jRecords[1].t and jRecords[2].lifeHK == 41
+	and jRecords[15].lifeHK == 41 and J.ns.Records.Encode(jRecords[2]):sub(1, 2) == "B1", jRecords[2].lifeHK)
+check("counter records stay out, a match keeps its board as a backfill match", (function()
+	local matches = 0
+	for _, r in ipairs(jRecords) do
+		if r.type == "X" then return false end
+		if r.type == "M" then
+			matches = matches + 1
+			if r.backfill ~= true or J.ns.Records.Encode(r):sub(1, 2) ~= "C1" or r.lifeHK ~= 41 then return false end
+		end
+	end
+	return matches == 2
+end)())
+check("the chain still holds through the backfill", J.ns.Records.CheckChain(Journal(J)) == true)
+local jStats = J.ns.Stats.Character(J.guid, "all", "all")
+check("the stats count the backfill like kills", jStats.kills == 10 and jStats.kb == 3 and jStats.deaths == 3,
+	("%d/%d/%d"):format(jStats.kills, jStats.kb, jStats.deaths))
+check("the count before the addon shrinks by the kills the probe placed", J.ns.Stats.AuthorInfo(J.guid).before == 31,
+	J.ns.Stats.AuthorInfo(J.guid).before)
+check("the baseline and the counter are untouched", J.db().characters[J.guid].baselineHK == 40 and J.db().characters[J.guid].lifeHK == 41)
+check("backfill is not broadcast one by one", SentSince(mark, "GUILD", "R") == 0)
+advance(200)
+check("a member takes the backfilled journal and reads it the same", Held(A, J) == 15 and A.ns.Stats.Character(J.guid, "all", "all").kills == 10
+	and A.ns.Stats.AuthorInfo(J.guid).before == 31, ("%d held, before %s"):format(Held(A, J), tostring(A.ns.Stats.AuthorInfo(J.guid).before)))
+J.logout()
+J.login()
+advance(5)
+check("a second login backfills nothing twice", #Journal(J) == 15 and J.counter("import.backfill") == 14)
+J.slash("import")
+check("/kbs import says the backfill is done", J.said("Déjà repris"))
+
+-- The probe numbered kills past the count the addon started from: they
+-- cannot be from before it, so nothing is appended.
+K.login()
+advance(20)
+K.state.target = HORDE[3].guid
+K.fire("PARTY_KILL", K.guid, HORDE[3].guid)
+K.fire("UNIT_DIED", HORDE[3].guid)
+GainHK(K)
+advance(5)
+K.logout()
+K.probe = ProbeOf(K, "Kestrel Vane-" .. Mock.REALM)
+K.login()
+advance(5)
+check("backfill past the addon's first count is refused whole", #Journal(K) == 1 and K.counter("import.mismatch") == 1
+	and K.db().characters[K.guid].imported == nil, #Journal(K))
+K.slash("import")
+check("/kbs import says the counts do not fit", K.said("ne colle pas"))
 
 -- A member whose probe was older than 0.1.3: its file matched nothing, has
 -- no assists ring and no place or subzone on the HKs. The import matches
@@ -1042,6 +1128,8 @@ check("the stats add them up", iStats.kills == 6 and iStats.kb == 1 and iStats.d
 section("The window")
 --------------------------------------------------------------------------------
 
+-- A logged in again since the stats alias was taken: its modules were reloaded.
+Stats = A.ns.Stats
 A.slash("")
 local window = A.env.KilledBySavagesFrame
 check("/kbs opens the window", window ~= nil and window.shown == true)

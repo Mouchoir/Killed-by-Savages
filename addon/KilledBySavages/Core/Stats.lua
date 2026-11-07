@@ -93,7 +93,7 @@ end
 -- hunting board and the feed need.
 local function Aggregate(guid)
 	local author = ns.db.authors[guid]
-	local agg = { weeks = {}, kills = {}, deaths = {}, victims = {}, killers = {}, provisional = 0, records = 0 }
+	local agg = { weeks = {}, kills = {}, deaths = {}, victims = {}, killers = {}, provisional = 0, records = 0, backfilled = 0 }
 	if not author then return agg end
 	local lifeKs = {}
 	local counters = {}
@@ -114,7 +114,15 @@ local function Aggregate(guid)
 				Bump(weekly, record.bucket, "hk")
 				if IsKillingBlow(record) then Bump(weekly, record.bucket, "kb") end
 			end
-			lifeKs[#lifeKs + 1] = record.lifeHK
+			-- A backfill kill sits outside the chain: it never falls inside
+			-- a counter record's range, and in the world it takes one HK off
+			-- the count the addon started from (in a battleground its match
+			-- does, below).
+			if record.backfill then
+				if record.bucket ~= "b" then agg.backfilled = agg.backfilled + 1 end
+			else
+				lifeKs[#lifeKs + 1] = record.lifeHK
+			end
 			agg.kills[#agg.kills + 1] = { seq = seq, record = record, provisional = provisional }
 			if record.vtail then
 				local victim = agg.victims[record.vtail]
@@ -147,6 +155,8 @@ local function Aggregate(guid)
 			end
 		elseif record.type == "X" then
 			counters[#counters + 1] = { week = week, bucket = record.bucket, from = record.fromHK, to = record.toHK }
+		elseif record.type == "M" and record.backfill then
+			agg.backfilled = agg.backfilled + (record.hk or 0)
 		end
 	end)
 	-- A counter record covers HKs the server counted with no detail; kills
@@ -292,6 +302,11 @@ function Stats.AuthorInfo(guid)
 	local author = ns.db.authors[guid]
 	local profile = author and author.profile
 	local member = Identity.MemberByTail(Util.Tail(guid))
+	-- Honorable kills the server counted before the addon's first count,
+	-- less those the probe's backfill placed: real, but with no time, victim
+	-- or guild to go with them.
+	local baseline = profile and profile.baselineHK or nil
+	local before = type(baseline) == "number" and math.max(0, baseline - Stats.AuthorAggregate(guid).backfilled) or nil
 	return {
 		guid = guid,
 		name = (profile and profile.name) or (member and member.name) or Util.Tail(guid) or "?",
@@ -300,9 +315,7 @@ function Stats.AuthorInfo(guid)
 		level = (member and member.level) or (profile and profile.level) or nil,
 		playerKey = profile and profile.playerKey or nil,
 		alias = profile and profile.alias or nil,
-		-- Honorable kills the server counted before the addon's first count:
-		-- real, but with no time, victim or guild to go with them.
-		before = profile and profile.baselineHK or nil,
+		before = before,
 		inGuild = member ~= nil,
 		verified = author and author.profileVerified == true,
 		own = author and author.own == true,
