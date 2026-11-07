@@ -52,12 +52,12 @@ ns.UI.RegisterTab({
 		local divider = Theme.Divider(frame, L.GUILD_FEED, 300)
 		divider:SetPoint("TOP", 0, -24)
 		frame.view = ListView.New(frame, {
-			{ key = "time", title = L.COL_TIME, width = 80, muted = true, sort = "text" },
-			{ key = "member", title = L.COL_MEMBER, width = 180, icon = "class", classColor = true, sort = "text" },
-			{ key = "event", title = L.COL_EVENT, width = 90, muted = true, sort = "text" },
-			{ key = "enemy", title = L.COL_ENEMY, width = 190, icon = "race", sort = "text" },
-			{ key = "enemyClass", title = L.COL_CLASS, width = 90, muted = true },
-			{ key = "zone", title = L.COL_ZONE, width = 130, muted = true, sort = "text" },
+			{ key = "time", title = L.COL_TIME, width = 70, muted = true, sort = "text" },
+			{ key = "member", title = L.COL_MEMBER, width = 160, icon = "class", classColor = true, sort = "text" },
+			{ key = "event", title = L.COL_EVENT, width = 100, muted = true, sort = "text" },
+			{ key = "enemy", title = L.COL_ENEMY, width = 170, icon = "race", sort = "text" },
+			{ key = "enemyClass", title = L.COL_CLASS, width = 85, muted = true },
+			{ key = "zone", title = L.COL_ZONE, width = 175, muted = true, sort = "text" },
 		}, { emptyText = L.EMPTY_FEED })
 		frame.view.panel:SetPoint("TOPLEFT", 0, -46)
 		frame.view.panel:SetPoint("BOTTOMRIGHT", 0, 0)

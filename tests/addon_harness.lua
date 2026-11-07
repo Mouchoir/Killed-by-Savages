@@ -504,7 +504,7 @@ check("a newcomer gets an offline author's journal from a holder", Held(D, A) ==
 check("relayed by B or C, and marked so", D.db().authors[A.guid].relayed and D.db().authors[A.guid].relayed > 0)
 check("holders answered the newcomer's inventory with what they had more of", SentSince(mark, "GUILD", "A") >= 1)
 check("only one holder served each page", SentSince(mark, "WHISPER", "B") <= 2 * math.ceil(aHead / 200) + 2)
-check("B's and C's own journals reached D too", D.db().authors[B.guid] ~= nil or Held(B, B) == 0)
+check("B's and C's own journals reached D too", Held(D, B) == Held(B, B) and Held(D, C) == Held(C, C), Held(D, B) .. "/" .. Held(B, B))
 
 -- A forged inventory: C claims a huge head for A; nobody has those pages.
 local dCount = D.counter("sync.request")
@@ -919,6 +919,13 @@ advance(70)
 check("the hello after the import announces the head", SentSince(mark, "GUILD", "H") >= 1 and network.sent[#network.sent] ~= nil)
 advance(120)
 check("a member takes the imported journal by whisper", Held(A, F) == 16, Held(A, F))
+-- The newcomer's inventory lists only its own journal: the others answer
+-- with what it lacks, so it does not stay alone on its board.
+check("and the newcomer takes the journals the others hold", Held(F, A) == Held(A, A) and Held(A, A) > 0 and Held(F, B) == Held(B, B),
+	("A %d/%d B %d/%d, requests %d, timeouts %d, busy answers %d"):format(Held(F, A), Held(A, A), Held(F, B), Held(B, B),
+		F.counter("sync.request"), F.counter("sync.requestTimeout"), F.counter("sync.pageBusy")))
+check("a holder with enough going out says so instead of staying silent", F.counter("sync.pageBusy") >= 1 and F.counter("sync.requestTimeout") == 0,
+	F.counter("sync.pageBusy") .. "/" .. F.counter("sync.requestTimeout"))
 F.logout()
 F.login()
 advance(5)
@@ -1051,6 +1058,11 @@ check("the me tab lists my characters and shows my alias", #Rows(window.tabFrame
 UI.SetPeriod("last")
 check("a period without data shows the empty state", window.tabFrames.me.view.empty.shown == true)
 UI.SetPeriod("all")
+-- The list hands the same buttons back with other data: dressed once, so
+-- refreshed or scrolled rows never draw over what they showed before.
+local reused = Rows(window.tabFrames.guild.view)[1]
+check("a row handed back by the list keeps one set of cells", reused ~= nil and #reused.children == 1 and reused.row == reused.children[1],
+	reused and #reused.children)
 UI.SetBucket("b")
 check("the battleground bucket keeps the matches' HKs", Rows(window.tabFrames.me.view)[1] and Rows(window.tabFrames.me.view)[1].row.data.kills == 5,
 	Rows(window.tabFrames.me.view)[1] and Rows(window.tabFrames.me.view)[1].row.data.kills)

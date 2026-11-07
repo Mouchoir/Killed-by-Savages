@@ -432,6 +432,9 @@ function Mock.NewClient(spec)
 		env.CreateFrame = function(kind, name, parent)
 			local frame = NewFrame(client, kind, name)
 			frame.parent = parent
+			if type(parent) == "table" and type(parent.children) == "table" then
+				parent.children[#parent.children + 1] = frame
+			end
 			if name then env[name] = frame end
 			return frame
 		end
@@ -465,11 +468,18 @@ function Mock.NewClient(spec)
 		env.ScrollUtil = {
 			InitScrollBoxListWithScrollBar = function(box, _, view)
 				box.view = view
+				-- Like the game's, the list keeps its buttons and hands them to the
+				-- initializer again with other data on every refresh or scroll.
 				box.SetDataProvider = function(self, provider)
 					self.provider = provider
+					self.pool = self.pool or {}
 					self.rows = {}
-					for _, item in ipairs(provider.list) do
-						local row = NewFrame(client, "Button")
+					for index, item in ipairs(provider.list) do
+						local row = self.pool[index]
+						if not row then
+							row = NewFrame(client, "Button")
+							self.pool[index] = row
+						end
 						view.init(row, item)
 						self.rows[#self.rows + 1] = row
 					end

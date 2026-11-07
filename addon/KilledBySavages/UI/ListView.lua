@@ -121,6 +121,8 @@ function ListView.New(parent, columns, options)
 				text:SetWidth(column.width - 8)
 				row.cells[index] = { text = text }
 			end
+			-- One line per row: a long value is cut, never wrapped over the next row.
+			row.cells[index].text:SetWordWrap(false)
 			row.cells[index].text:SetTextColor(Theme.Color("text"))
 			cx = cx + column.width
 		end
@@ -179,8 +181,9 @@ function ListView.New(parent, columns, options)
 		local linear = CreateScrollBoxListLinearView(0, 0, 0, 0, 0)
 		linear:SetElementExtent(ROW)
 		linear:SetElementInitializer("Button", function(button, data)
-			if not button.cells then
-				-- The ScrollBox hands us bare buttons: dress them once.
+			if not button.row then
+				-- The ScrollBox hands us bare buttons, and hands them again with
+				-- other data when the list scrolls or refreshes: dress each once.
 				local dressed = NewRow(button)
 				dressed:SetAllPoints(button)
 				button.row = dressed

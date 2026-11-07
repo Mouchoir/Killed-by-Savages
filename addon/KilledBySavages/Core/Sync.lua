@@ -52,6 +52,8 @@ local OUT_PAGE_MAX_AGE = 300
 local PARTIAL_MAX_AGE = 120
 local RECOVERY_WAIT = 120
 local ONLINE_WINDOW = 1800        -- a hello this recent means the author is around
+local BUSY_WAIT = 20              -- before asking again a holder that said it was busy
+local FAIL_RETRY = 300            -- before a holder that failed us gets another chance
 
 local LibDeflate = LibStub and LibStub("LibDeflate", true)
 
@@ -64,7 +66,8 @@ local seenHead = {}               -- author tail -> highest head announced by an
 local advancePending = {}         -- author tail -> true while an advance line waits
 local requests = {}               -- "tail:page" -> in-flight request
 local partial = {}                -- "tail:page" -> chunks received so far
-local failedBy = {}               -- author tail -> { [holder canon] = true } this session
+local failedBy = {}               -- author tail -> { [holder canon] = when it failed us }
+local busyUntil = {}              -- holder canon -> when it may be asked again
 local outPages = 0
 local inventorySent = false
 local recovery                    -- { from, to, until } while a crash is being recovered
@@ -380,17 +383,25 @@ local function SendRequest(tail, page, holder)
 	ns.Count("sync.request")
 end
 
+-- A holder that failed us gets another chance after a while; one that said
+-- it was busy, a little later.
+local function Unavailable(failed, canon)
+	local failedAt = failed[canon]
+	if failedAt ~= nil and Now() - failedAt < FAIL_RETRY then return true end
+	return (busyUntil[canon] or 0) > Now()
+end
+
 -- Picks the best holder for an author: the author itself when it is around,
 -- else the holder with the most complete copy that has not failed us.
 local function BestHolder(tail, failed)
 	local authorName = NameOfTail(tail)
 	local list = holders[tail] or {}
-	if authorName and IsAuthorOnline(tail) and list[Identity.Canon(authorName)] and not failed[Identity.Canon(authorName)] then
+	if authorName and IsAuthorOnline(tail) and list[Identity.Canon(authorName)] and not Unavailable(failed, Identity.Canon(authorName)) then
 		return authorName, list[Identity.Canon(authorName)]
 	end
 	local bestName, best
 	for canon, info in pairs(list) do
-		if not failed[canon] and InFlightFor(canon) == 0 then
+		if not Unavailable(failed, canon) and InFlightFor(canon) == 0 then
 			local member = Identity.Member(canon)
 			local complete = info.count >= info.head
 			if member and (not best or (complete and best.count < best.head) or info.head > best.head) then
@@ -442,7 +453,7 @@ local function CheckTimeouts()
 		if now > request.deadline then
 			requests[key] = nil
 			local failed = failedHolders(request.tail)
-			failed[Identity.Canon(request.holder)] = true
+			failed[Identity.Canon(request.holder)] = now
 			ns.Count("sync.requestTimeout")
 			partial[key] = nil
 		end
@@ -508,6 +519,9 @@ end
 local function OnRequest(sender, tail, page)
 	if not Identity.Member(sender) then return end
 	if outPages >= OUT_PAGES_CAP then
+		-- Enough pages going out already: the requester asks again later
+		-- instead of waiting for a timeout and giving us up.
+		SendWhisper("B", ("B^%s^%d^0^0^busy"):format(tail, page), sender, 3)
 		ns.Count("sync.pageRefused")
 		return
 	end
@@ -618,10 +632,17 @@ local function OnPageChunk(sender, tail, page, index, total, data)
 		return
 	end
 	if total == 0 then
-		-- The holder has nothing for that page.
 		requests[key] = nil
-		local failed = failedHolders(tail)
-		failed[Identity.Canon(sender)] = true
+		if data == "busy" then
+			-- The holder has too much going out: asked again a little later.
+			busyUntil[Identity.Canon(sender)] = Now() + BUSY_WAIT
+			ns.Count("sync.pageBusy")
+			Util.After(BUSY_WAIT + Jitter(0, 5), "sync-busy", Sync.Schedule)
+		else
+			-- The holder has nothing for that page.
+			local failed = failedHolders(tail)
+			failed[Identity.Canon(sender)] = Now()
+		end
 		Sync.Schedule()
 		return
 	end
@@ -641,7 +662,7 @@ local function OnPageChunk(sender, tail, page, index, total, data)
 	local text = Decompress(table.concat(part.pieces))
 	if not text then
 		ns.Count("sync.pageUndecodable")
-		failedHolders(tail)[Identity.Canon(sender)] = true
+		failedHolders(tail)[Identity.Canon(sender)] = Now()
 	else
 		StorePage(sender, tail, page, text)
 	end
@@ -703,11 +724,15 @@ local function ConfirmAuthor(tail, head, lifeHK)
 end
 
 -- Where we stand against what someone holds: more than us, or less than us.
-local function Compare(sender, list)
+-- A complete list (an inventory) also says what they hold nothing of: every
+-- journal we hold that it leaves out, their own included after a crash.
+local function Compare(sender, list, complete)
 	local canon = Identity.Canon(sender)
 	local member = Identity.Member(sender)
 	local ahead = {}
+	local listed = {}
 	for _, entry in ipairs(list) do
+		listed[entry.tail] = true
 		if member and entry.tail == member.tail then ConfirmAuthor(entry.tail, entry.head, entry.lifeHK) end
 		local author = ns.db.authors[GuidOf(entry.tail)]
 		local myHead, myCount = author and author.head or 0, author and author.count or 0
@@ -715,6 +740,13 @@ local function Compare(sender, list)
 		NoteHolder(entry.tail, canon, entry.head, entry.count)
 		if myHead > entry.head or (myHead == entry.head and myCount > entry.count) then
 			ahead[#ahead + 1] = { tail = entry.tail, head = myHead, count = myCount }
+		end
+	end
+	if complete then
+		for _, entry in ipairs(HeldEntries()) do
+			if not listed[entry.tail] then
+				ahead[#ahead + 1] = { tail = entry.tail, head = entry.head, count = entry.count }
+			end
 		end
 	end
 	if #ahead > 0 then ScheduleAdvance(ahead) end
@@ -735,7 +767,8 @@ local function OnHello(sender, fields)
 	local canon = Identity.Canon(sender)
 	peers[canon] = { tail = tail, head = head, lifeHK = lifeHK, playerKey = fields[7], version = fields[3], at = Now(), name = sender }
 	-- A hello with no inventory behind it is a member who holds nothing yet:
-	-- tell them everything we hold, unless their inventory shows up.
+	-- tell them everything we hold, unless their inventory shows up (and
+	-- then says what they lack).
 	local helloAt = Now()
 	Util.After(INVENTORY_WAIT, "advance-newcomer", function()
 		local peer = peers[canon]
@@ -840,7 +873,7 @@ local function OnAddonMessage(prefix, text, channel, sender)
 					local peer = peers[Identity.Canon(sender)]
 					if peer then peer.inventoryAt = Now() end
 				end
-				Compare(sender, ParseList(body))
+				Compare(sender, ParseList(body), kind == "I")
 				ns.Count("sync.listReceived")
 			end
 		end
