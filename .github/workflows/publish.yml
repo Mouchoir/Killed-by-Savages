@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       release_type:
-        description: CurseForge release type
+        description: Release type (stable on Wago for release)
         required: true
         default: release
         type: choice
@@ -23,6 +23,15 @@ on:
           - release
           - beta
           - alpha
+      targets:
+        description: Where to upload
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - curseforge
+          - wago
 
 permissions:
   contents: write # the release is created here, with the zip attached
@@ -144,6 +153,7 @@ jobs:
           if [[ ! -s "$RUNNER_TEMP/CHANGELOG.md" ]]; then printf 'Release %s\n' "$TAG" > "$RUNNER_TEMP/CHANGELOG.md"; fi
 
       - name: Prepare CurseForge metadata
+        if: github.event_name == 'push' || inputs.targets != 'wago'
         shell: bash
         env:
           CURSEFORGE_API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
@@ -207,6 +217,7 @@ jobs:
           echo "metadata.json:"; jq '.gameVersions, .displayName' metadata.json
 
       - name: Upload to CurseForge
+        if: github.event_name == 'push' || inputs.targets != 'wago'
         shell: bash
         env:
           CURSEFORGE_API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
@@ -218,6 +229,7 @@ jobs:
             "${CURSEFORGE_BASE_URL}/api/projects/${CURSEFORGE_PROJECT_ID}/upload-file"
 
       - name: Upload to Wago Addons
+        if: github.event_name == 'push' || inputs.targets != 'curseforge'
         shell: bash
         env:
           WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
