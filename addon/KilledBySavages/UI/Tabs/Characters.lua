@@ -21,6 +21,9 @@ local function Tooltip(row, data)
 	if data.provisional and data.provisional > 0 then
 		Theme.TooltipLine(L.TOOLTIP_UNCONFIRMED:format(data.provisional), Theme.Color("disabled"))
 	end
+	if data.before and data.before > 0 then
+		Theme.TooltipLine(L.TOOLTIP_BEFORE_ADDON:format(data.before), Theme.Color("muted"))
+	end
 	Theme.TooltipLine(L.TOOLTIP_LAST_KILLS, Theme.Color("head"))
 	for _, kill in ipairs(Stats.LastKills(data.guid, 5)) do
 		local record = kill.record
@@ -30,6 +33,7 @@ local function Tooltip(row, data)
 	end
 	Theme.TooltipShow()
 end
+ns.UI.CharacterTooltip = Tooltip
 
 ns.UI.RegisterTab({
 	key = "characters",

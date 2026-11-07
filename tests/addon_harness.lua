@@ -1062,6 +1062,12 @@ for _, key in ipairs({ "characters", "guild", "hunt", "me" }) do
 	check("the " .. key .. " tab builds and fills", window.tabFrames[key] ~= nil and window.tabFrames[key].shown == true)
 end
 check("the guild feed shows the latest events", #Rows(window.tabFrames.guild.view) > 0 and Rows(window.tabFrames.guild.view)[1].row.data.event ~= nil)
+check("a character's kills from before the addon travel with its profile", (function()
+	for _, row in ipairs(Stats.Characters("all", "all")) do
+		if row.guid == F.guid then return row.before == 30 end
+	end
+	return false
+end)())
 check("the hunt boards fill", #Rows(window.tabFrames.hunt.victims) > 0 and #Rows(window.tabFrames.hunt.killers) > 0)
 check("the me tab lists my characters and shows my alias", #Rows(window.tabFrames.me.view) == 1 and window.tabFrames.me.box.text == "Aldric the Bold")
 UI.SetPeriod("last")

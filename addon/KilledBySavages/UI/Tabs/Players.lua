@@ -16,6 +16,9 @@ local function Tooltip(row, data)
 		local r, g, b = Theme.ClassColor(character.class)
 		Theme.TooltipDouble(character.name, L.TOOLTIP_KILLS_FORMAT:format(character.kills), r, g, b)
 	end
+	if data.before and data.before > 0 then
+		Theme.TooltipLine(L.TOOLTIP_BEFORE_ADDON:format(data.before), Theme.Color("muted"))
+	end
 	Theme.TooltipShow()
 end
 

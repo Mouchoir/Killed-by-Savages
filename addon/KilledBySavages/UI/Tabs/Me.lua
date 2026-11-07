@@ -75,7 +75,7 @@ ns.UI.RegisterTab({
 			{ key = "kills", title = L.COL_KILLS, width = 64, align = "RIGHT", sort = "number", format = Theme.Number },
 			{ key = "kb", title = L.COL_KB_SHORT, width = 60, align = "RIGHT", sort = "number", format = Theme.Number },
 			{ key = "deaths", title = L.COL_DEATHS, width = 60, align = "RIGHT", sort = "number", format = Theme.Number },
-		}, { emptyText = L.EMPTY_ME, sortKey = "kills" })
+		}, { emptyText = L.EMPTY_ME, sortKey = "kills", tooltip = ns.UI.CharacterTooltip })
 		frame.view.panel:SetPoint("TOPLEFT", 0, -56)
 		frame.view.panel:SetPoint("TOPRIGHT", 0, -56)
 		frame.view.panel:SetHeight(Theme.ROW * CHARACTER_ROWS + ListView.HEADER + 12)

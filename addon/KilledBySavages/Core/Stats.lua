@@ -300,6 +300,9 @@ function Stats.AuthorInfo(guid)
 		level = (member and member.level) or (profile and profile.level) or nil,
 		playerKey = profile and profile.playerKey or nil,
 		alias = profile and profile.alias or nil,
+		-- Honorable kills the server counted before the addon's first count:
+		-- real, but with no time, victim or guild to go with them.
+		before = profile and profile.baselineHK or nil,
 		inGuild = member ~= nil,
 		verified = author and author.profileVerified == true,
 		own = author and author.own == true,
@@ -333,7 +336,7 @@ function Stats.Characters(period, bucket)
 			if sum.kills > 0 or sum.deaths > 0 then
 				local info = Stats.AuthorInfo(guid)
 				sum.guid, sum.name, sum.class, sum.level = guid, info.name, info.class, info.level
-				sum.playerKey, sum.me = info.playerKey, guid == Identity.me.guid
+				sum.playerKey, sum.me, sum.before = info.playerKey, guid == Identity.me.guid, info.before
 				rows[#rows + 1] = sum
 			end
 		end
@@ -356,7 +359,7 @@ function Stats.Players(period, bucket)
 			local groupKey = info.playerKey or ("char:" .. guid)
 			local group = groups[groupKey]
 			if not group then
-				group = { key = groupKey, kills = 0, kb = 0, deaths = 0, characters = {}, me = false }
+				group = { key = groupKey, kills = 0, kb = 0, deaths = 0, before = 0, characters = {}, me = false }
 				groups[groupKey] = group
 			end
 			local sum = Stats.Character(guid, period, bucket)
@@ -364,6 +367,7 @@ function Stats.Players(period, bucket)
 			group.kills = group.kills + sum.kills
 			group.kb = group.kb + sum.kb
 			group.deaths = group.deaths + sum.deaths
+			group.before = group.before + (info.before or 0)
 			group.characters[#group.characters + 1] = { guid = guid, name = info.name, class = info.class, kills = sum.kills, ever = ever.kills, deaths = sum.deaths }
 			if info.alias and (not group.alias or info.verified) then group.alias = info.alias end
 			if guid == Identity.me.guid then group.me = true end
