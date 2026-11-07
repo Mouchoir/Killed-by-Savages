@@ -217,6 +217,7 @@ local function BuildShell()
 		if Theme.TooltipStart(self, L.MILESTONE_TITLE) then
 			Theme.TooltipLine(L.MILESTONE_NEXT:format(milestone.next))
 			Theme.TooltipLine(L.MILESTONE_DISTINCT:format(milestone.distinct))
+			Theme.TooltipLine(L.MILESTONE_SCOPE)
 			Theme.TooltipShow()
 		end
 	end)
