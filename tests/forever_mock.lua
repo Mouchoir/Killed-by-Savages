@@ -258,6 +258,8 @@ end
 -- Frames: just enough widget API for the addons and their windows.
 --------------------------------------------------------------------------------
 
+local FIELD_KEYS = { Low = true, High = true, Text = true, Inset = true, TitleText = true, Bg = true, Icon = true, NineSlice = true, ScrollBar = true }
+
 local function NewFrame(client, kind, name)
 	local frame = { kind = kind or "Frame", name = name, shown = true, scripts = {}, events = {}, text = "", children = {} }
 	local methods = {}
@@ -277,17 +279,46 @@ local function NewFrame(client, kind, name)
 	function methods.SetText(self, text) self.text = text end
 	function methods.GetText(self) return self.text end
 	function methods.GetName(self) return self.name end
-	function methods.GetWidth() return 100 end
-	function methods.GetHeight() return 100 end
+	function methods.GetWidth(self) return self.width or 100 end
+	function methods.GetHeight(self) return self.height or 100 end
+	function methods.SetSize(self, width, height) self.width, self.height = width, height end
+	function methods.SetWidth(self, width) self.width = width end
+	function methods.SetHeight(self, height) self.height = height end
+	function methods.GetStringWidth() return 50 end
 	function methods.GetFrameLevel() return 1 end
 	function methods.GetParent(self) return self.parent end
 	function methods.SetParent(self, parent) self.parent = parent end
-	function methods.CreateTexture() return NewFrame(client, "Texture") end
-	function methods.CreateFontString() return NewFrame(client, "FontString") end
-	function methods.CreateMaskTexture() return NewFrame(client, "MaskTexture") end
+	function methods.SetID(self, id) self.id = id end
+	function methods.GetID(self) return self.id or 0 end
+	function methods.GetPoint() return nil end
+	function methods.GetValue(self) return self.value or 1 end
+	function methods.SetValue(self, value) self.value = value end
+	function methods.GetChecked(self) return self.checked == true end
+	function methods.SetChecked(self, checked) self.checked = checked end
+	function methods.HasFocus() return false end
+	function methods.SetFont() return true end
+	function methods.SetTexture() return true end
+	function methods.GetNormalTexture() return nil end
+	function methods.SetAllPoints() end
+	local function Region(self, regionKind)
+		local region = NewFrame(client, regionKind)
+		region.parent = self
+		return region
+	end
+	function methods.CreateTexture(self) return Region(self, "Texture") end
+	function methods.CreateFontString(self) return Region(self, "FontString") end
+	function methods.CreateMaskTexture(self) return Region(self, "MaskTexture") end
+	function methods.CreateAnimationGroup(self) return Region(self, "AnimationGroup") end
+	function methods.CreateAnimation(self) return Region(self, "Animation") end
+	-- Unknown methods are no-ops; unknown fields (lower case, or the child
+	-- regions templates add) are nil, as on a frame the game creates.
 	setmetatable(frame, {
 		__index = function(_, key)
-			return methods[key] or function() end
+			if methods[key] then return methods[key] end
+			if type(key) == "string" and key:match("^%u") and not FIELD_KEYS[key] then
+				return function() end
+			end
+			return nil
 		end,
 	})
 	client.frames[#client.frames + 1] = frame
@@ -407,8 +438,44 @@ function Mock.NewClient(spec)
 		env.UIParent = NewFrame(client, "Frame", "UIParent")
 		env.Minimap = NewFrame(client, "Frame", "Minimap")
 		env.MinimapCluster = NewFrame(client, "Frame", "MinimapCluster")
+		env.GameTooltip = NewFrame(client, "GameTooltip", "GameTooltip")
 		env.UISpecialFrames = {}
 		env.ChatFontNormal = {}
+		env.LOCALIZED_CLASS_NAMES_MALE = { WARRIOR = "Guerrier", MAGE = "Mage", HUNTER = "Chasseur", ROGUE = "Voleur",
+			PALADIN = "Paladin", PRIEST = "Prêtre", SHAMAN = "Chaman", WARLOCK = "Démoniste", DRUID = "Druide" }
+		env.SOUNDKIT = { IG_CHARACTER_INFO_OPEN = 839, IG_CHARACTER_INFO_CLOSE = 840 }
+		env.PlaySound = function() end
+		-- The 12.x list: enough of it to run every row initializer once.
+		env.ScrollBoxConstants = { RetainScrollPosition = 1, AlignNearest = 2 }
+		env.CreateScrollBoxListLinearView = function()
+			local view = {}
+			function view:SetElementExtent(extent) self.extent = extent end
+			function view:SetElementInitializer(_, fn) self.init = fn end
+			function view:SetElementExtentCalculator() end
+			function view:SetElementFactory() end
+			function view:SetPadding() end
+			return view
+		end
+		env.CreateDataProvider = function(list)
+			local provider = { list = list or {} }
+			function provider:Insert(item) self.list[#self.list + 1] = item end
+			function provider:GetSize() return #self.list end
+			return provider
+		end
+		env.ScrollUtil = {
+			InitScrollBoxListWithScrollBar = function(box, _, view)
+				box.view = view
+				box.SetDataProvider = function(self, provider)
+					self.provider = provider
+					self.rows = {}
+					for _, item in ipairs(provider.list) do
+						local row = NewFrame(client, "Button")
+						view.init(row, item)
+						self.rows[#self.rows + 1] = row
+					end
+				end
+			end,
+		}
 		env.DEFAULT_CHAT_FRAME = { AddMessage = function(_, text) client.chat[#client.chat + 1] = text end }
 		env.C_Timer = { After = function(delay, fn) later(delay, fn) end }
 		env.GetTime = function() return now end

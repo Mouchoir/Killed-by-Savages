@@ -249,17 +249,19 @@ local function SortRows(rows)
 	return rows
 end
 
--- Every guild member whose journal we hold, ranked.
+-- Every guild member whose journal says something for the period, ranked.
 function Stats.Characters(period, bucket)
 	local rows = {}
 	for tail, member in pairs(Identity.roster.byTail) do
 		local guid = member.guid or ("Player-" .. tail)
 		if ns.db.authors[guid] then
 			local sum = Stats.Character(guid, period, bucket)
-			local info = Stats.AuthorInfo(guid)
-			sum.guid, sum.name, sum.class, sum.level = guid, info.name, info.class, info.level
-			sum.playerKey, sum.me = info.playerKey, guid == Identity.me.guid
-			rows[#rows + 1] = sum
+			if sum.kills > 0 or sum.deaths > 0 then
+				local info = Stats.AuthorInfo(guid)
+				sum.guid, sum.name, sum.class, sum.level = guid, info.name, info.class, info.level
+				sum.playerKey, sum.me = info.playerKey, guid == Identity.me.guid
+				rows[#rows + 1] = sum
+			end
 		end
 	end
 	return SortRows(rows)
@@ -295,15 +297,17 @@ function Stats.Players(period, bucket)
 	end
 	local rows = {}
 	for _, group in pairs(groups) do
-		table.sort(group.characters, function(a, b)
-			if a.ever ~= b.ever then return a.ever > b.ever end
-			return a.name < b.name
-		end)
-		local main = group.characters[1]
-		group.name = group.alias or main.name
-		group.class = main.class
-		group.mainGuid = main.guid
-		rows[#rows + 1] = Finish(group)
+		if group.kills > 0 or group.deaths > 0 then
+			table.sort(group.characters, function(a, b)
+				if a.ever ~= b.ever then return a.ever > b.ever end
+				return a.name < b.name
+			end)
+			local main = group.characters[1]
+			group.name = group.alias or main.name
+			group.class = main.class
+			group.mainGuid = main.guid
+			rows[#rows + 1] = Finish(group)
+		end
 	end
 	SortRows(rows)
 	cache.players[key] = rows

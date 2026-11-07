@@ -15,7 +15,7 @@ read_globals = {
 	"C_Texture", "C_XMLUtil", "C_ClassColor", "RAID_CLASS_COLORS", "NineSliceUtil",
 	"ScrollUtil", "CreateScrollBoxListLinearView", "CreateDataProvider", "ScrollBoxConstants",
 	"PanelTemplates_SelectTab", "PanelTemplates_DeselectTab", "PanelTemplates_SetNumTabs", "PanelTemplates_TabResize",
-	"Settings", "STANDARD_TEXT_FONT",
+	"Settings", "STANDARD_TEXT_FONT", "GameFontNormalHuge", "GameFontNormalLarge", "LOCALIZED_CLASS_NAMES_MALE",
 
 	-- Where we are
 	"IsInInstance", "GetInstanceInfo", "GetRealZoneText", "GetSubZoneText", "C_Map", "C_PvP",

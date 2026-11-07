@@ -28,3 +28,13 @@ Core\Records.lua
 Core\Detect.lua
 Core\Sync.lua
 Core\Stats.lua
+UI\Theme.lua
+UI\ListView.lua
+UI\Window.lua
+UI\Tabs\Players.lua
+UI\Tabs\Characters.lua
+UI\Tabs\Guild.lua
+UI\Tabs\Hunt.lua
+UI\Tabs\Me.lua
+UI\Minimap.lua
+Core\Options.lua

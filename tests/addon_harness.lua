@@ -613,7 +613,7 @@ local players = Stats.Players("all", "all")
 check("players are ranked, A first", players[1] and players[1].name == "Aldric Stormhand" and players[1].me == true and players[1].rank == 1,
 	players[1] and players[1].name)
 check("a player's numbers are its characters' numbers", players[1].kills == all.kills and #players[1].characters == 1)
-check("every member with a journal is a player", #players >= 3, #players)
+check("members without kills or deaths this period stay out of the ranking", #players == 1, #players)
 A.ns.Identity.SetAlias("  Aldric^the;Bold  ")
 advance(10)
 check("an alias is cleaned and shown as the player's name", Stats.Players("all", "all")[1].name == "Aldric the Bold")
@@ -690,6 +690,47 @@ advance(200)
 check("packed pages are served and stored elsewhere", (E.db().authors[synthGuid] and E.db().authors[synthGuid].count or 0) == 450,
 	E.db().authors[synthGuid] and E.db().authors[synthGuid].count)
 check("the copy reads the same", E.ns.Records.Get(synthGuid, 150) and E.ns.Records.Get(synthGuid, 150).lifeHK == 1150)
+
+--------------------------------------------------------------------------------
+section("The window")
+--------------------------------------------------------------------------------
+
+A.slash("")
+local window = A.env.KilledBySavagesFrame
+check("/kbs opens the window", window ~= nil and window.shown == true)
+check("the window registers for ESC", A.env.UISpecialFrames[1] == "KilledBySavagesFrame")
+local UI = A.ns.UI
+check("the players tab is the home view", UI.State().tab == "players" and UI.State().period == "week")
+local function Rows(view)
+	return view and view.scrollBox and view.scrollBox.rows or {}
+end
+local playersTab = window.tabFrames.players
+check("the players list has one row per player", #Rows(playersTab.view) == #Stats.Players("week", "all") and #Rows(playersTab.view) >= 1,
+	#Rows(playersTab.view))
+check("the first row carries the first player's numbers", Rows(playersTab.view)[1].row.data.rank == 1 and Rows(playersTab.view)[1].row.cells[2].text.text == Stats.Players("week", "all")[1].name)
+for _, key in ipairs({ "characters", "guild", "hunt", "me" }) do
+	UI.SelectTab(key)
+	check("the " .. key .. " tab builds and fills", window.tabFrames[key] ~= nil and window.tabFrames[key].shown == true)
+end
+check("the guild feed shows the latest events", #Rows(window.tabFrames.guild.view) > 0 and Rows(window.tabFrames.guild.view)[1].row.data.event ~= nil)
+check("the hunt boards fill", #Rows(window.tabFrames.hunt.victims) > 0 and #Rows(window.tabFrames.hunt.killers) > 0)
+check("the me tab lists my characters and shows my alias", #Rows(window.tabFrames.me.view) == 1 and window.tabFrames.me.box.text == "Aldric the Bold")
+UI.SetPeriod("last")
+check("a period without data shows the empty state", window.tabFrames.me.view.empty.shown == true)
+UI.SetPeriod("all")
+UI.SetBucket("b")
+check("the battleground bucket keeps the match's HKs", Rows(window.tabFrames.me.view)[1] and Rows(window.tabFrames.me.view)[1].row.data.kills == 3)
+UI.SetBucket("all")
+UI.SelectTab("players")
+A.slash("")
+check("/kbs closes the window", window.shown == false)
+A.logout()
+A.login()
+advance(5)
+check("the window remembers its tab and filters", A.db().settings.tab == "players" and A.db().settings.period == "all" and A.db().settings.bucket == "all")
+check("the minimap button registered", A.ns.MinimapButton.registered == true)
+A.slash("options")
+check("options fall back gracefully without the Settings API", A.said("not available") or A.said("pas disponible"))
 
 --------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")
