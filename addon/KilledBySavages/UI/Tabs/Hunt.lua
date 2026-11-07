@@ -36,12 +36,14 @@ local function BuildBoards(frame, filterFn)
 	local half = (frame:GetWidth() > 0 and frame:GetWidth() or 788) / 2
 	local leftTitle = Theme.Divider(frame, L.HUNT_MOST_KILLED, half - 12)
 	leftTitle:SetPoint("TOPLEFT", 0, -2)
+	-- Each board is half the tab wide: 352 px of columns fit beside its
+	-- scrollbar in the 820 px window.
 	frame.victims = ListView.New(frame, {
-		{ key = "name", title = L.COL_ENEMY, width = 170, icon = "race", sort = "text" },
-		{ key = "class", title = L.COL_CLASS, width = 70, muted = true },
+		{ key = "name", title = L.COL_ENEMY, width = 158, icon = "race", sort = "text" },
+		{ key = "class", title = L.COL_CLASS, width = 62, muted = true },
 		{ key = "count", title = L.COL_KILLS, width = 50, align = "RIGHT", sort = "number", format = Theme.Number },
 		{ key = "kb", title = L.COL_KB_SHORT, width = 46, align = "RIGHT", sort = "number", format = Theme.Number },
-		{ key = "by", title = L.COL_BY, width = 40, align = "RIGHT", sort = "number", format = Theme.Number },
+		{ key = "by", title = L.COL_BY, width = 36, align = "RIGHT", sort = "number", format = Theme.Number },
 	}, { emptyText = L.EMPTY_HUNT, sortKey = "count" })
 	frame.victims.panel:SetPoint("TOPLEFT", 0, -24)
 	frame.victims.panel:SetPoint("BOTTOMRIGHT", frame, "BOTTOM", -6, 0)
@@ -49,7 +51,7 @@ local function BuildBoards(frame, filterFn)
 	rightTitle:SetPoint("TOPRIGHT", 0, -2)
 	frame.killers = ListView.New(frame, {
 		{ key = "name", title = L.COL_ENEMY, width = 170, icon = "race", sort = "text" },
-		{ key = "class", title = L.COL_CLASS, width = 70, muted = true },
+		{ key = "class", title = L.COL_CLASS, width = 62, muted = true },
 		{ key = "count", title = L.COL_DEATHS, width = 56, align = "RIGHT", sort = "number", format = Theme.Number },
 		{ key = "victims", title = L.COL_VICTIMS, width = 56, align = "RIGHT", sort = "number", format = Theme.Number },
 	}, { emptyText = L.EMPTY_KILLERS, sortKey = "count" })

@@ -11,6 +11,8 @@ local ListView = ns.ListView
 local Identity = ns.Identity
 local L = ns.L
 
+local CHARACTER_ROWS = 5          -- rows shown for my characters before scrolling
+
 local function MyPlayerKey()
 	return Identity.me.playerKey
 end
@@ -65,27 +67,24 @@ ns.UI.RegisterTab({
 		summary:SetTextColor(Theme.Color("text"))
 		frame.summary = summary
 
+		-- My characters across the top (a few rows), my two hunting boards
+		-- side by side below, as wide as the hunt tab's so their columns fit.
 		frame.view = ListView.New(frame, {
-			{ key = "name", title = L.COL_CHARACTER, width = 200, icon = "class", classColor = true, sort = "text" },
+			{ key = "name", title = L.COL_CHARACTER, width = 220, icon = "class", classColor = true, sort = "text" },
 			{ key = "level", title = L.COL_LEVEL, width = 46, align = "RIGHT", muted = true },
 			{ key = "kills", title = L.COL_KILLS, width = 64, align = "RIGHT", sort = "number", format = Theme.Number },
 			{ key = "kb", title = L.COL_KB_SHORT, width = 60, align = "RIGHT", sort = "number", format = Theme.Number },
 			{ key = "deaths", title = L.COL_DEATHS, width = 60, align = "RIGHT", sort = "number", format = Theme.Number },
 		}, { emptyText = L.EMPTY_ME, sortKey = "kills" })
 		frame.view.panel:SetPoint("TOPLEFT", 0, -56)
-		frame.view.panel:SetPoint("BOTTOMRIGHT", frame, "BOTTOM", -6, 0)
+		frame.view.panel:SetPoint("TOPRIGHT", 0, -56)
+		frame.view.panel:SetHeight(Theme.ROW * CHARACTER_ROWS + ListView.HEADER + 12)
 
 		local boards = CreateFrame("Frame", nil, frame)
-		boards:SetPoint("TOPLEFT", frame, "TOP", 6, -32)
+		boards:SetPoint("TOPLEFT", frame.view.panel, "BOTTOMLEFT", 0, -8)
 		boards:SetPoint("BOTTOMRIGHT", 0, 0)
 		frame.boards = boards
 		ns.UI.BuildBoards(boards, function() return { playerKey = MyPlayerKey() } end)
-		boards.victims.panel:ClearAllPoints()
-		boards.victims.panel:SetPoint("TOPLEFT", 0, -24)
-		boards.victims.panel:SetPoint("BOTTOMRIGHT", boards, "BOTTOM", -3, 0)
-		boards.killers.panel:ClearAllPoints()
-		boards.killers.panel:SetPoint("TOPLEFT", boards, "TOP", 3, -24)
-		boards.killers.panel:SetPoint("BOTTOMRIGHT", 0, 0)
 	end,
 	Refresh = function(frame, period, bucket)
 		if not frame.box:HasFocus() then frame.box:SetText(Identity.Alias() or "") end

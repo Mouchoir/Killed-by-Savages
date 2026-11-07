@@ -19,6 +19,7 @@ ns.ListView = ListView
 local ROW = Theme.ROW
 local HEADER = 22
 local GUTTER = 18
+ListView.HEADER = HEADER
 
 local function HasScrollBox()
 	return Util.Fn(CreateScrollBoxListLinearView) ~= nil and Util.Fn(CreateDataProvider) ~= nil
@@ -33,6 +34,8 @@ function ListView.New(parent, columns, options)
 	local panel = CreateFrame("Frame", nil, parent, "BackdropTemplate")
 	Theme.Panel(panel, 12, 3)
 	Theme.Parchment(panel, 0.14)
+	-- Whatever would run past the panel stays inside it, never over a neighbour.
+	if panel.SetClipsChildren then panel:SetClipsChildren(true) end
 	view.panel = panel
 
 	-- Column header band
