@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: Killed by Savages - Probe
+## Notes: Dev probe for the Killed by Savages guild addon. Silent. Records what the Forever client lets addons see about PvP kills and shares a small report with the other probes of the guild.
+## Notes-frFR: Sonde de développement de l'addon de guilde Killed by Savages. Silencieuse. Note ce que le client Forever laisse voir des kills PvP et partage un petit rapport avec les autres sondes de la guilde.
+## Author: Mouchoir
+## Version: 0.1.3
+## SavedVariables: KBSProbeDB
+## X-Category: Development
+
+KBSProbe.lua

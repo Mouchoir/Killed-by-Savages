@@ -1,0 +1,5 @@
+*.zip
+*.log
+dist/
+scripts/dev.local.ps1
+tests/last-savedvariables*.lua
