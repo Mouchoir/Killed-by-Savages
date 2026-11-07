@@ -560,6 +560,138 @@ LeaveBG(B)
 advance(5)
 
 --------------------------------------------------------------------------------
+section("Stats: characters, players, guild, hunting board, feed")
+--------------------------------------------------------------------------------
+
+A.login()
+advance(70)
+local Stats = A.ns.Stats
+
+-- What a journal should add up to, computed here with the plain rules.
+local function Expected(client, bucket)
+	local sum = { kills = 0, kb = 0, deaths = 0 }
+	local lifeKs, counters = {}, {}
+	for _, r in ipairs(Journal(client)) do
+		local wanted = bucket == "all" or r.bucket == bucket
+		if r.type == "K" then
+			lifeKs[#lifeKs + 1] = r.lifeHK
+			if wanted then
+				sum.kills = sum.kills + 1
+				if r.how == "kb" or r.how == "pet" then sum.kb = sum.kb + 1 end
+			end
+		elseif r.type == "D" and wanted then
+			sum.deaths = sum.deaths + 1
+		elseif r.type == "M" and wanted then
+			sum.kills = sum.kills + r.hk
+		elseif r.type == "X" and wanted then
+			counters[#counters + 1] = r
+		end
+	end
+	for _, x in ipairs(counters) do
+		local inside = 0
+		for _, lifeHK in ipairs(lifeKs) do
+			if lifeHK > x.fromHK and lifeHK <= x.toHK then inside = inside + 1 end
+		end
+		sum.kills = sum.kills + math.max(0, (x.toHK - x.fromHK) - inside)
+	end
+	return sum
+end
+
+local all = Stats.Character(A.guid, "all", "all")
+local want = Expected(A, "all")
+check("a character's totals match its journal", all.kills == want.kills and all.kb == want.kb and all.deaths == want.deaths,
+	("%d/%d/%d vs %d/%d/%d"):format(all.kills, all.kb, all.deaths, want.kills, want.kb, want.deaths))
+check("assists are the kills that were not killing blows", all.assists == all.kills - all.kb and all.assists > 0)
+check("the K/D divides kills by deaths", math.abs(all.kd - all.kills / all.deaths) < 0.001)
+local world, bg = Stats.Character(A.guid, "all", "w"), Stats.Character(A.guid, "all", "b")
+check("the battleground bucket holds the match's HKs", bg.kills == Expected(A, "b").kills and bg.kills == 3, bg.kills)
+check("counter records count in the total only", world.kills + bg.kills < all.kills and world.kills == Expected(A, "w").kills)
+check("everything happened this week", Stats.Character(A.guid, "week", "all").kills == all.kills and Stats.Character(A.guid, "last", "all").kills == 0)
+check("the week anchor came from the client", A.db().weekAnchor == Mock.Server() + 30 * 3600 or math.abs(A.db().weekAnchor - (Mock.Server() + 30 * 3600)) < 200)
+
+local players = Stats.Players("all", "all")
+check("players are ranked, A first", players[1] and players[1].name == "Aldric Stormhand" and players[1].me == true and players[1].rank == 1,
+	players[1] and players[1].name)
+check("a player's numbers are its characters' numbers", players[1].kills == all.kills and #players[1].characters == 1)
+check("every member with a journal is a player", #players >= 3, #players)
+A.ns.Identity.SetAlias("  Aldric^the;Bold  ")
+advance(10)
+check("an alias is cleaned and shown as the player's name", Stats.Players("all", "all")[1].name == "Aldric the Bold")
+check("the new profile reached the others", B.db().authors[A.guid].profile.alias == "Aldric the Bold")
+
+-- B kills the same enemy A assists on: two kills for the members, one
+-- enemy death for the guild.
+local guildBefore = Stats.Guild("all", "all")
+B.fire("PARTY_KILL", B.guid, HORDE[5].guid)
+B.fire("UNIT_DIED", HORDE[5].guid)
+A.fire("UNIT_DIED", HORDE[5].guid)
+GainHK(B)
+advance(1)
+GainHK(A)
+advance(10)
+local guildAfter = Stats.Guild("all", "all")
+check("the guild total counts both members' kills", guildAfter.kills == guildBefore.kills + 2, guildAfter.kills - guildBefore.kills)
+check("but the enemy died once", guildAfter.distinct == guildBefore.distinct + 1, guildAfter.distinct - guildBefore.distinct)
+check("the guild total includes every journal held", guildAfter.authors >= 3, guildAfter.authors)
+check("B's live kill is in A's view of B", Stats.Character(B.guid, "all", "all").kills == 1)
+
+-- A character that leaves the guild drops out of the rankings, not of the total.
+Mock.SetGuildRoster({ { guid = A.guid, rank = 0 }, { guid = C.guid, rank = 4 }, { guid = Guid(5), rank = 3 }, { guid = D.guid, rank = 3 }, { guid = E.guid, rank = 3 } })
+RefreshRosters()
+local found = false
+for _, row in ipairs(Stats.Characters("all", "all")) do
+	if row.guid == B.guid then found = true end
+end
+check("a departed character is out of the rankings", not found)
+check("its kills stay in the guild total", Stats.Guild("all", "all").kills == guildAfter.kills)
+
+local victims = Stats.Victims("all", "all", nil, 5)
+check("the hunting board names the most killed enemy", victims[1] and victims[1].name == "Sylas Mournhollow" and victims[1].count >= 2, victims[1] and victims[1].name)
+check("with how many members killed it", victims[1].byCount >= 1 and victims[1].class == "MAGE")
+local mine = Stats.Victims("all", "all", { guid = A.guid })
+check("a character's own board is a subset", #mine <= #Stats.Victims("all", "all"))
+local killers = Stats.Killers("all", "all", nil, 5)
+check("our killers are listed from the deaths", killers[1] and (killers[1].name == "Gruk Bonecrusher" or killers[1].name == "Schwarzesau"))
+local feed = Stats.Feed(10, "all")
+check("the feed is newest first with the author's name", feed[1] and feed[1].t >= feed[2].t and feed[1].info and feed[1].info.name ~= nil)
+local milestone = Stats.Milestone()
+check("the next milestone is the first one not reached", milestone.next == 100 and milestone.previous == 0 and milestone.progress == milestone.distinct / 100)
+
+--------------------------------------------------------------------------------
+section("Compaction: old pages packed, still served and counted")
+--------------------------------------------------------------------------------
+
+local synthGuid, synthTail = "Player-1234-00000AAA", "1234-00000AAA"
+local old = Mock.Server() - 3 * 7 * 24 * 3600
+for seq = 1, 450 do
+	local line = A.ns.Records.Encode({ type = "K", seq = seq, t = old + seq, bucket = "w", how = "unk", lifeHK = 1000 + seq })
+	A.ns.Records.Store(synthGuid, seq, line, "page")
+end
+Stats.Invalidate()
+local sizeBefore = #Serialize(A.db())
+local countBefore = Stats.Character(synthGuid, "all", "all").kills
+check("a 450-record journal counts 450 kills", countBefore == 450, countBefore)
+local packed = A.ns.Records.Compact(Mock.Server() - 7 * 24 * 3600)
+Stats.Invalidate()
+local synth = A.db().authors[synthGuid]
+check("two full old pages were packed, the partial one kept", packed == 2 and synth.pages[1] and synth.pages[2] and not synth.pages[3]
+	and synth.log[401] ~= nil and synth.log[400] == nil)
+check("the saved data shrank", #Serialize(A.db()) < sizeBefore - 10000, sizeBefore - #Serialize(A.db()))
+check("a packed record still reads", A.ns.Records.Get(synthGuid, 150) and A.ns.Records.Get(synthGuid, 150).lifeHK == 1150)
+check("and still counts", Stats.Character(synthGuid, "all", "all").kills == 450)
+check("a store into a packed page is refused", select(2, A.ns.Records.Store(synthGuid, 10, "K1;10;1;w;unk;;;;;;;;;;1", "page")) == "packed")
+check("recent pages are never packed", A.db().authors[A.guid].pages == nil or next(A.db().authors[A.guid].pages) == nil)
+
+-- A packed page is served to a member who asks for it.
+local eState = E.ns.Sync.State()
+eState.holders[synthTail] = { ["aldric stormhand"] = { head = 450, count = 450, at = Mock.Server() } }
+E.ns.Sync.Schedule()
+advance(200)
+check("packed pages are served and stored elsewhere", (E.db().authors[synthGuid] and E.db().authors[synthGuid].count or 0) == 450,
+	E.db().authors[synthGuid] and E.db().authors[synthGuid].count)
+check("the copy reads the same", E.ns.Records.Get(synthGuid, 150) and E.ns.Records.Get(synthGuid, 150).lifeHK == 1150)
+
+--------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")
 --------------------------------------------------------------------------------
 

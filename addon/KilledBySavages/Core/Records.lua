@@ -247,10 +247,138 @@ function Records.Author(guid)
 	return author
 end
 
-function Records.Get(guid, seq)
+--------------------------------------------------------------------------------
+-- Packed pages
+--
+-- A page of 200 records that is complete and old is kept as one deflated
+-- string instead of 200 entries: the SavedVariables stay small and the
+-- game loads them faster. Packed pages are unpacked on demand and cached.
+--------------------------------------------------------------------------------
+
+local unpacked = setmetatable({}, { __mode = "k" })   -- author -> { [page] = { [seq] = text } }
+
+local function PageOf(seq)
+	return math.floor((seq - 1) / Records.PAGE) + 1
+end
+Records.PageOf = PageOf
+
+function Records.PageRange(page)
+	return (page - 1) * Records.PAGE + 1, page * Records.PAGE
+end
+
+local function LibDeflate()
+	return LibStub and LibStub("LibDeflate", true)
+end
+
+-- The records of a packed page, seq -> text, or nil when not packed.
+function Records.UnpackPage(author, page)
+	local packed = author.pages and author.pages[page]
+	if not packed then return nil end
+	local cache = unpacked[author]
+	if cache and cache[page] then return cache[page] end
+	local deflate = LibDeflate()
+	if not deflate then return nil end
+	local raw = deflate:DecodeForPrint(packed)
+	local text = raw and deflate:DecompressDeflate(raw)
+	if not text then return nil end
+	local lines = {}
+	for line in (text .. "\n"):gmatch("(.-)\n") do
+		if line ~= "" then
+			local seq = tonumber(line:match("^%a%d+;(%d+);"))
+			if seq then lines[seq] = line end
+		end
+	end
+	cache = cache or {}
+	cache[page] = lines
+	unpacked[author] = cache
+	return lines
+end
+
+-- The raw deflated bytes of a packed page, for Sync to re-encode for the
+-- addon channel without inflating it.
+function Records.PackedBytes(author, page)
+	local packed = author.pages and author.pages[page]
+	local deflate = LibDeflate()
+	if not packed or not deflate then return nil end
+	return deflate:DecodeForPrint(packed)
+end
+
+-- The text of one record, wherever it is kept.
+function Records.Line(guid, seq)
 	local author = ns.db.authors[guid]
 	if not author then return nil end
 	local text = author.log[seq]
+	if text then return text end
+	if author.pages and author.pages[PageOf(seq)] then
+		local lines = Records.UnpackPage(author, PageOf(seq))
+		return lines and lines[seq] or nil
+	end
+	return nil
+end
+
+function Records.Has(author, seq)
+	if author.log[seq] then return true end
+	return author.pages ~= nil and author.pages[PageOf(seq)] ~= nil
+end
+
+-- Every record of an author, decoded, in seq order (holes skipped).
+function Records.Each(guid, fn)
+	local author = ns.db.authors[guid]
+	if not author then return end
+	for seq = 1, author.head or 0 do
+		local text = Records.Line(guid, seq)
+		if text then
+			local record = Records.Decode(text)
+			if record then fn(record, text, seq) end
+		end
+	end
+end
+
+-- Packs one complete page of an author. Returns true when done.
+function Records.PackPage(guid, page)
+	local author = ns.db.authors[guid]
+	local deflate = LibDeflate()
+	if not author or not deflate then return false end
+	if author.pages and author.pages[page] then return true end
+	local from, to = Records.PageRange(page)
+	local lines = {}
+	for seq = from, to do
+		local text = author.log[seq]
+		if not text then return false end
+		lines[#lines + 1] = text
+	end
+	local raw = deflate:CompressDeflate(table.concat(lines, "\n"), { level = 9 })
+	author.pages = author.pages or {}
+	author.pages[page] = deflate:EncodeForPrint(raw)
+	for seq = from, to do
+		author.log[seq] = nil
+	end
+	if unpacked[author] then unpacked[author][page] = nil end
+	return true
+end
+
+-- Packs every complete page whose records are all older than a time, for
+-- every author. Returns the number of pages packed.
+function Records.Compact(olderThan)
+	local packed = 0
+	for guid, author in pairs(ns.db.authors) do
+		local lastPage = PageOf(math.max(author.head or 0, 1)) - 1
+		for page = 1, lastPage do
+			if not (author.pages and author.pages[page]) then
+				local _, to = Records.PageRange(page)
+				local last = author.log[to] and Records.Decode(author.log[to])
+				if last and type(last.t) == "number" and last.t < olderThan and Records.PackPage(guid, page) then
+					packed = packed + 1
+				end
+			end
+		end
+	end
+	if packed > 0 then ns.Count("records.packed", packed) end
+	return packed
+end
+
+function Records.Get(guid, seq)
+	local text = Records.Line(guid, seq)
 	return text and Records.Decode(text) or nil, text
 end
 
@@ -259,6 +387,7 @@ end
 -- by the author's own copy.
 function Records.Store(guid, seq, text, source)
 	local author = Records.Author(guid)
+	if author.pages and author.pages[PageOf(seq)] then return false, "packed" end
 	local existing = author.log[seq]
 	if existing then
 		if existing == text then return false, "same" end
@@ -340,15 +469,10 @@ end
 
 -- The records of an author in a seq range, decoded, holes skipped.
 function Records.Range(guid, from, to)
-	local author = ns.db.authors[guid]
 	local list = {}
-	if not author then return list end
 	for seq = from, to do
-		local text = author.log[seq]
-		if text then
-			local record = Records.Decode(text)
-			if record then list[#list + 1] = record end
-		end
+		local record = Records.Get(guid, seq)
+		if record then list[#list + 1] = record end
 	end
 	return list
 end

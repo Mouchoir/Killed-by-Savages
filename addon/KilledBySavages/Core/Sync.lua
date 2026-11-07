@@ -322,18 +322,20 @@ end
 --------------------------------------------------------------------------------
 
 -- The pages of an author where we miss seqs up to the head a holder has.
+-- A packed page is complete by construction.
 local function MissingPages(tail, holderHead)
 	local author = ns.db.authors[GuidOf(tail)]
-	local log = author and author.log or {}
 	local rejected = author and author.rejected or {}
 	local pages = {}
 	for page = PageOf(holderHead), 1, -1 do
-		local from, to = PageRange(page)
-		if to > holderHead then to = holderHead end
-		for seq = from, to do
-			if not log[seq] and not rejected[seq] then
-				pages[#pages + 1] = page
-				break
+		if not (author and author.pages and author.pages[page]) then
+			local from, to = PageRange(page)
+			if to > holderHead then to = holderHead end
+			for seq = from, to do
+				if not (author and author.log[seq]) and not rejected[seq] then
+					pages[#pages + 1] = page
+					break
+				end
 			end
 		end
 	end
@@ -479,12 +481,17 @@ local function Decompress(data)
 	return nil
 end
 
--- The lines of a page: the author's profile first, then its records.
+-- The lines of a page: the author's profile first, then its records. A
+-- packed page is served from its deflated bytes without inflating it, the
+-- profile sent apart.
 function Sync.BuildPage(tail, page)
 	local author = ns.db.authors[GuidOf(tail)]
 	if not author then return nil end
+	local profileLine = author.profile and Records.EncodeProfile(author.profile) or nil
+	local packedBytes = Records.PackedBytes(author, page)
+	if packedBytes then return nil, Records.PAGE, packedBytes, profileLine end
 	local lines = {}
-	if author.profile then lines[#lines + 1] = Records.EncodeProfile(author.profile) end
+	if profileLine then lines[#lines + 1] = profileLine end
 	local from, to = PageRange(page)
 	local n = 0
 	for seq = from, to do
@@ -504,14 +511,20 @@ local function OnRequest(sender, tail, page)
 		ns.Count("sync.pageRefused")
 		return
 	end
-	local text = Sync.BuildPage(tail, page)
-	if not text then
+	local text, _, packedBytes, profileLine = Sync.BuildPage(tail, page)
+	if not text and not packedBytes then
 		-- Nothing here: say so, the requester moves on.
 		SendWhisper("B", ("B^%s^%d^0^0^"):format(tail, page), sender, 3)
 		ns.Count("sync.pageEmpty")
 		return
 	end
-	local data = Compress(text)
+	local data
+	if packedBytes and LibDeflate then
+		data = "z" .. LibDeflate:EncodeForWoWAddonChannel(packedBytes)
+		if profileLine then SendWhisper("P", ("P^%s^%s"):format(tail, profileLine), sender, 3) end
+	else
+		data = Compress(text)
+	end
 	local chunks = {}
 	local rest = data
 	while #rest > 0 do
@@ -738,17 +751,24 @@ local function OnHello(sender, fields)
 	ns.Fire("PeerSeen", canon, peers[canon])
 end
 
-local function OnProfile(sender, tail, text)
+-- A profile from its author is taken as is; one relayed with a packed page
+-- (a whisper from a holder) only fills a blank, unverified.
+local function OnProfile(sender, tail, text, channel)
 	local member = Identity.Member(sender)
-	if not member or member.tail ~= tail then
-		ns.Count("sync.profileNotAuthor")
-		return
-	end
+	if not member then return end
 	local profile = Records.DecodeProfile(text)
 	if not profile then return end
 	local author = Records.Author(GuidOf(tail))
-	author.profile = profile
-	author.profileVerified = true
+	if member.tail == tail then
+		author.profile = profile
+		author.profileVerified = true
+	elseif channel == "WHISPER" and not author.profile then
+		author.profile = profile
+		author.profileVerified = nil
+	else
+		ns.Count("sync.profileNotAuthor")
+		return
+	end
 	ns.Fire("ProfileChanged", GuidOf(tail))
 end
 
@@ -811,7 +831,7 @@ local function OnAddonMessage(prefix, text, channel, sender)
 		OnHello(sender, fields)
 	elseif kind == "P" then
 		local tail, body = text:match("^P%^([%d%-%x]+)%^(.*)$")
-		if tail then OnProfile(sender, tail, body) end
+		if tail then OnProfile(sender, tail, body, channel) end
 	elseif kind == "I" or kind == "A" then
 		local body = text:match("^[IA]%^(.*)$")
 		if body then
@@ -926,8 +946,20 @@ local function OnLogin()
 	Util.Every(10, "sync-timeouts", CheckTimeouts)
 end
 
+-- A new display name goes out as a new profile.
+local function OnAliasChanged()
+	local me = Me()
+	if not me.tail then return end
+	local profile = Records.OwnProfile()
+	ns.Fire("ProfileChanged", me.guid)
+	if Identity.InGuild() then
+		SendGuild("P", ("P^%s^%s"):format(me.tail, Records.EncodeProfile(profile)), 1)
+	end
+end
+
 ns.On("CHAT_MSG_ADDON", OnAddonMessage)
 ns.Hook("Login", OnLogin)
+ns.Hook("AliasChanged", OnAliasChanged)
 ns.Hook("RecordAdded", OnOwnRecord)
 ns.Hook("CounterJump", OnCounterJump)
 ns.Hook("JournalChanged", OnOwnJournalChanged)

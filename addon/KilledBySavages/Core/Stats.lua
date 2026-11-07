@@ -1,0 +1,578 @@
+local _, ns = ...
+
+--------------------------------------------------------------------------------
+-- Statistics
+--
+-- Everything the window shows is computed here from the journals: per
+-- character, per player (the characters of one Battle.net account that are
+-- still in the guild), for the whole guild (every journal held, departed
+-- members included, each enemy death counted once), the hunting board and
+-- the kill feed. Periods are weeks aligned on the server's weekly reset.
+-- Aggregates are cached and dropped whenever a journal changes.
+--------------------------------------------------------------------------------
+
+local Util = ns.Util
+local Records = ns.Records
+local Identity = ns.Identity
+
+local Stats = {}
+ns.Stats = Stats
+
+local WEEK = Util.WEEK
+local FALLBACK_ANCHOR = 1793764800     -- 2026-11-04 04:00 UTC, a weekly reset
+local DEDUPE_WINDOW = 5                -- seconds between two reports of one enemy death
+local DEDUPE_DISTANCE = 0.03           -- map units between two unnamed kills counted once
+local COMPACT_DELAY = 20
+
+Stats.MILESTONES = { 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000 }
+Stats.PERIODS = { "week", "last", "all" }
+Stats.BUCKETS = { "w", "b", "all" }
+
+local cache = { authors = {}, guild = {}, players = {}, feed = {} }
+
+--------------------------------------------------------------------------------
+-- Weeks
+--------------------------------------------------------------------------------
+
+function Stats.Anchor()
+	local anchor = ns.db and ns.db.weekAnchor
+	return type(anchor) == "number" and anchor or FALLBACK_ANCHOR
+end
+
+-- Any instant at which a weekly reset happens is a valid anchor; the client
+-- says when the next one is.
+function Stats.RefreshAnchor()
+	if not (C_DateAndTime and Util.Fn(C_DateAndTime.GetSecondsUntilWeeklyReset)) then return end
+	local seconds = Util.Get(C_DateAndTime.GetSecondsUntilWeeklyReset)
+	if type(seconds) == "number" and seconds >= 0 and seconds <= WEEK then
+		ns.db.weekAnchor = Util.Now() + seconds
+	end
+end
+
+function Stats.WeekIndex(t)
+	return math.floor((t - Stats.Anchor()) / WEEK)
+end
+
+function Stats.CurrentWeek()
+	return Stats.WeekIndex(Util.Now())
+end
+
+function Stats.WeekStart(index)
+	return Stats.Anchor() + index * WEEK
+end
+
+local function InPeriod(period, week, current)
+	if period == "all" then return true end
+	if period == "week" then return week == current end
+	if period == "last" then return week == current - 1 end
+	return false
+end
+
+--------------------------------------------------------------------------------
+-- Per author
+--------------------------------------------------------------------------------
+
+local function NewCounts()
+	return { hk = 0, kb = 0, deaths = 0 }
+end
+
+local function NewWeek()
+	return { w = NewCounts(), b = NewCounts(), u = NewCounts() }
+end
+
+local function Bump(week, bucket, field, amount)
+	local counts = week[bucket] or week.u
+	counts[field] = (counts[field] or 0) + (amount or 1)
+end
+
+local function IsKillingBlow(record)
+	return record.how == "kb" or record.how == "pet"
+end
+
+-- Everything one journal says, by week and bucket, plus the lists the
+-- hunting board and the feed need.
+local function Aggregate(guid)
+	local author = ns.db.authors[guid]
+	local agg = { weeks = {}, kills = {}, deaths = {}, victims = {}, killers = {}, provisional = 0, records = 0 }
+	if not author then return agg end
+	local lifeKs = {}
+	local counters = {}
+	Records.Each(guid, function(record, _, seq)
+		agg.records = agg.records + 1
+		local week = Stats.WeekIndex(record.t)
+		local weekly = agg.weeks[week]
+		if not weekly then
+			weekly = NewWeek()
+			agg.weeks[week] = weekly
+		end
+		local provisional = author.provisional ~= nil and author.provisional[seq] == true
+		if provisional then agg.provisional = agg.provisional + 1 end
+		if record.type == "K" then
+			Bump(weekly, record.bucket, "hk")
+			if IsKillingBlow(record) then Bump(weekly, record.bucket, "kb") end
+			lifeKs[#lifeKs + 1] = record.lifeHK
+			agg.kills[#agg.kills + 1] = { seq = seq, record = record, provisional = provisional }
+			if record.vtail then
+				local victim = agg.victims[record.vtail]
+				if not victim then
+					victim = { tail = record.vtail, count = 0, kb = 0 }
+					agg.victims[record.vtail] = victim
+				end
+				victim.count = victim.count + 1
+				if IsKillingBlow(record) then victim.kb = victim.kb + 1 end
+				if not victim.lastAt or record.t >= victim.lastAt then
+					victim.lastAt = record.t
+					victim.name, victim.class, victim.race, victim.level = record.vname, record.vclass, record.vrace, record.vlevel
+				end
+			end
+		elseif record.type == "D" then
+			Bump(weekly, record.bucket, "deaths")
+			agg.deaths[#agg.deaths + 1] = { seq = seq, record = record, provisional = provisional }
+			local key = record.ktail or (record.kname and ("pet:" .. record.kname)) or nil
+			if key then
+				local killer = agg.killers[key]
+				if not killer then
+					killer = { key = key, tail = record.ktail, kind = record.kkind, count = 0 }
+					agg.killers[key] = killer
+				end
+				killer.count = killer.count + 1
+				if not killer.lastAt or record.t >= killer.lastAt then
+					killer.lastAt = record.t
+					killer.name, killer.class, killer.race = record.kname, record.kclass, record.krace
+				end
+			end
+		elseif record.type == "M" then
+			Bump(weekly, "b", "hk", record.hk or 0)
+		elseif record.type == "X" then
+			counters[#counters + 1] = { week = week, bucket = record.bucket, from = record.fromHK, to = record.toHK }
+		end
+	end)
+	-- A counter record covers HKs the server counted with no detail; kills
+	-- recovered later inside its range are not counted twice.
+	if #counters > 0 then
+		table.sort(lifeKs)
+		for _, counter in ipairs(counters) do
+			local inside = 0
+			for _, lifeHK in ipairs(lifeKs) do
+				if lifeHK > counter.from and lifeHK <= counter.to then inside = inside + 1 end
+			end
+			local net = (counter.to - counter.from) - inside
+			if net > 0 then
+				local weekly = agg.weeks[counter.week] or NewWeek()
+				agg.weeks[counter.week] = weekly
+				Bump(weekly, counter.bucket, "hk", net)
+			end
+		end
+	end
+	return agg
+end
+
+function Stats.AuthorAggregate(guid)
+	local agg = cache.authors[guid]
+	if not agg then
+		agg = Aggregate(guid)
+		cache.authors[guid] = agg
+	end
+	return agg
+end
+
+local function Add(into, counts)
+	into.kills = into.kills + (counts.hk or 0)
+	into.kb = into.kb + (counts.kb or 0)
+	into.deaths = into.deaths + (counts.deaths or 0)
+end
+
+local function Finish(sum)
+	sum.assists = sum.kills - sum.kb
+	if sum.deaths > 0 then
+		sum.kd = sum.kills / sum.deaths
+	else
+		sum.kd = sum.kills
+	end
+	return sum
+end
+
+-- The numbers of one character for a period and a bucket.
+function Stats.Character(guid, period, bucket)
+	local agg = Stats.AuthorAggregate(guid)
+	local sum = { kills = 0, kb = 0, deaths = 0 }
+	local current = Stats.CurrentWeek()
+	for week, weekly in pairs(agg.weeks) do
+		if InPeriod(period, week, current) then
+			if bucket == "all" then
+				Add(sum, weekly.w)
+				Add(sum, weekly.b)
+				Add(sum, weekly.u)
+			else
+				Add(sum, weekly[bucket] or NewCounts())
+			end
+		end
+	end
+	sum.provisional = agg.provisional
+	return Finish(sum)
+end
+
+--------------------------------------------------------------------------------
+-- Who is who, for display
+--------------------------------------------------------------------------------
+
+function Stats.AuthorInfo(guid)
+	local author = ns.db.authors[guid]
+	local profile = author and author.profile
+	local member = Identity.MemberByTail(Util.Tail(guid))
+	return {
+		guid = guid,
+		name = (profile and profile.name) or (member and member.name) or Util.Tail(guid) or "?",
+		class = (profile and profile.class) or (member and member.class) or nil,
+		race = profile and profile.race or nil,
+		level = (member and member.level) or (profile and profile.level) or nil,
+		playerKey = profile and profile.playerKey or nil,
+		alias = profile and profile.alias or nil,
+		inGuild = member ~= nil,
+		verified = author and author.profileVerified == true,
+		own = author and author.own == true,
+	}
+end
+
+--------------------------------------------------------------------------------
+-- Characters and players
+--------------------------------------------------------------------------------
+
+local function SortRows(rows)
+	table.sort(rows, function(a, b)
+		if a.kills ~= b.kills then return a.kills > b.kills end
+		if a.kb ~= b.kb then return a.kb > b.kb end
+		if a.deaths ~= b.deaths then return a.deaths < b.deaths end
+		return (a.name or "") < (b.name or "")
+	end)
+	for index, row in ipairs(rows) do row.rank = index end
+	return rows
+end
+
+-- Every guild member whose journal we hold, ranked.
+function Stats.Characters(period, bucket)
+	local rows = {}
+	for tail, member in pairs(Identity.roster.byTail) do
+		local guid = member.guid or ("Player-" .. tail)
+		if ns.db.authors[guid] then
+			local sum = Stats.Character(guid, period, bucket)
+			local info = Stats.AuthorInfo(guid)
+			sum.guid, sum.name, sum.class, sum.level = guid, info.name, info.class, info.level
+			sum.playerKey, sum.me = info.playerKey, guid == Identity.me.guid
+			rows[#rows + 1] = sum
+		end
+	end
+	return SortRows(rows)
+end
+
+-- Characters grouped by Battle.net account: a player. Only characters still
+-- in the guild count. The name is the alias the player chose, else the
+-- character with the most kills ever.
+function Stats.Players(period, bucket)
+	local key = period .. ":" .. bucket
+	if cache.players[key] then return cache.players[key] end
+	local groups = {}
+	for tail, member in pairs(Identity.roster.byTail) do
+		local guid = member.guid or ("Player-" .. tail)
+		local author = ns.db.authors[guid]
+		if author then
+			local info = Stats.AuthorInfo(guid)
+			local groupKey = info.playerKey or ("char:" .. guid)
+			local group = groups[groupKey]
+			if not group then
+				group = { key = groupKey, kills = 0, kb = 0, deaths = 0, characters = {}, me = false }
+				groups[groupKey] = group
+			end
+			local sum = Stats.Character(guid, period, bucket)
+			local ever = Stats.Character(guid, "all", "all")
+			group.kills = group.kills + sum.kills
+			group.kb = group.kb + sum.kb
+			group.deaths = group.deaths + sum.deaths
+			group.characters[#group.characters + 1] = { guid = guid, name = info.name, class = info.class, kills = sum.kills, ever = ever.kills, deaths = sum.deaths }
+			if info.alias and (not group.alias or info.verified) then group.alias = info.alias end
+			if guid == Identity.me.guid then group.me = true end
+		end
+	end
+	local rows = {}
+	for _, group in pairs(groups) do
+		table.sort(group.characters, function(a, b)
+			if a.ever ~= b.ever then return a.ever > b.ever end
+			return a.name < b.name
+		end)
+		local main = group.characters[1]
+		group.name = group.alias or main.name
+		group.class = main.class
+		group.mainGuid = main.guid
+		rows[#rows + 1] = Finish(group)
+	end
+	SortRows(rows)
+	cache.players[key] = rows
+	return rows
+end
+
+--------------------------------------------------------------------------------
+-- The guild
+--------------------------------------------------------------------------------
+
+-- All kill records held, from every journal, filtered and sorted by time.
+local function AllKills(period, bucket)
+	local list = {}
+	local current = Stats.CurrentWeek()
+	for guid in pairs(ns.db.authors) do
+		local agg = Stats.AuthorAggregate(guid)
+		for _, kill in ipairs(agg.kills) do
+			local record = kill.record
+			if (bucket == "all" or record.bucket == bucket) and InPeriod(period, Stats.WeekIndex(record.t), current) then
+				list[#list + 1] = { t = record.t, record = record, author = guid, provisional = kill.provisional }
+			end
+		end
+	end
+	table.sort(list, function(a, b)
+		if a.t ~= b.t then return a.t < b.t end
+		return a.author < b.author
+	end)
+	return list
+end
+
+local function Near(a, b)
+	if a.mapID == nil or a.mapID ~= b.mapID then return false end
+	if a.x == nil or b.x == nil then return true end
+	return math.abs(a.x - b.x) <= DEDUPE_DISTANCE and math.abs(a.y - b.y) <= DEDUPE_DISTANCE
+end
+
+-- Enemy deaths counted once: a named kill repeats one reported within the
+-- window by another member; an unnamed kill is absorbed by any named one
+-- near it in time, or by another unnamed one from someone else next to it.
+local function DistinctKills(list)
+	local distinct = 0
+	local lastSeen = {}
+	for index, item in ipairs(list) do
+		local record = item.record
+		if record.vtail then
+			local last = lastSeen[record.vtail]
+			if not last or item.t - last > DEDUPE_WINDOW then distinct = distinct + 1 end
+			lastSeen[record.vtail] = item.t
+		else
+			local absorbed = false
+			local j = index - 1
+			while j >= 1 and item.t - list[j].t <= DEDUPE_WINDOW do
+				local other = list[j]
+				if other.record.vtail or (other.author ~= item.author and Near(other.record, record)) then
+					absorbed = true
+					break
+				end
+				j = j - 1
+			end
+			j = index + 1
+			while not absorbed and j <= #list and list[j].t - item.t <= DEDUPE_WINDOW do
+				if list[j].record.vtail then absorbed = true end
+				j = j + 1
+			end
+			if not absorbed then distinct = distinct + 1 end
+		end
+	end
+	return distinct
+end
+
+function Stats.Guild(period, bucket)
+	local key = period .. ":" .. bucket
+	if cache.guild[key] then return cache.guild[key] end
+	local sum = { kills = 0, kb = 0, deaths = 0, authors = 0, provisional = 0 }
+	for guid in pairs(ns.db.authors) do
+		local character = Stats.Character(guid, period, bucket)
+		sum.kills = sum.kills + character.kills
+		sum.kb = sum.kb + character.kb
+		sum.deaths = sum.deaths + character.deaths
+		sum.provisional = sum.provisional + character.provisional
+		sum.authors = sum.authors + 1
+	end
+	Finish(sum)
+	sum.distinct = DistinctKills(AllKills(period, bucket))
+	cache.guild[key] = sum
+	return sum
+end
+
+-- The next milestone of the guild, on enemy deaths of all time.
+function Stats.Milestone()
+	local distinct = Stats.Guild("all", "all").distinct
+	local previous, nextOne = 0, nil
+	for _, milestone in ipairs(Stats.MILESTONES) do
+		if distinct >= milestone then
+			previous = milestone
+		elseif not nextOne then
+			nextOne = milestone
+		end
+	end
+	nextOne = nextOne or Stats.MILESTONES[#Stats.MILESTONES]
+	return { distinct = distinct, previous = previous, next = nextOne, progress = math.min(1, (distinct - previous) / math.max(1, nextOne - previous)) }
+end
+
+--------------------------------------------------------------------------------
+-- The hunting board
+--------------------------------------------------------------------------------
+
+local function Scoped(filter)
+	local guids = {}
+	if filter and filter.guid then
+		guids[#guids + 1] = filter.guid
+	elseif filter and filter.playerKey then
+		for tail, member in pairs(Identity.roster.byTail) do
+			local guid = member.guid or ("Player-" .. tail)
+			local info = ns.db.authors[guid] and Stats.AuthorInfo(guid)
+			if info and info.playerKey == filter.playerKey then guids[#guids + 1] = guid end
+		end
+	else
+		for guid in pairs(ns.db.authors) do guids[#guids + 1] = guid end
+	end
+	return guids
+end
+
+-- The enemies most killed, by the guild, a player or a character.
+function Stats.Victims(period, bucket, filter, limit)
+	local current = Stats.CurrentWeek()
+	local byTail = {}
+	for _, guid in ipairs(Scoped(filter)) do
+		local agg = Stats.AuthorAggregate(guid)
+		for _, kill in ipairs(agg.kills) do
+			local record = kill.record
+			if record.vtail and (bucket == "all" or record.bucket == bucket) and InPeriod(period, Stats.WeekIndex(record.t), current) then
+				local victim = byTail[record.vtail]
+				if not victim then
+					victim = { tail = record.vtail, count = 0, kb = 0, by = {}, byCount = 0 }
+					byTail[record.vtail] = victim
+				end
+				victim.count = victim.count + 1
+				if IsKillingBlow(record) then victim.kb = victim.kb + 1 end
+				if not victim.by[guid] then
+					victim.by[guid] = true
+					victim.byCount = victim.byCount + 1
+				end
+				if not victim.lastAt or record.t >= victim.lastAt then
+					victim.lastAt = record.t
+					victim.name, victim.class, victim.race, victim.level = record.vname, record.vclass, record.vrace, record.vlevel
+				end
+			end
+		end
+	end
+	local rows = {}
+	for _, victim in pairs(byTail) do rows[#rows + 1] = victim end
+	table.sort(rows, function(a, b)
+		if a.count ~= b.count then return a.count > b.count end
+		if a.lastAt ~= b.lastAt then return (a.lastAt or 0) > (b.lastAt or 0) end
+		return (a.name or "") < (b.name or "")
+	end)
+	if limit then
+		while #rows > limit do table.remove(rows) end
+	end
+	return rows
+end
+
+-- Who kills us the most.
+function Stats.Killers(period, bucket, filter, limit)
+	local current = Stats.CurrentWeek()
+	local byKey = {}
+	for _, guid in ipairs(Scoped(filter)) do
+		local agg = Stats.AuthorAggregate(guid)
+		for _, death in ipairs(agg.deaths) do
+			local record = death.record
+			local key = record.ktail or (record.kname and ("pet:" .. record.kname)) or nil
+			if key and (bucket == "all" or record.bucket == bucket) and InPeriod(period, Stats.WeekIndex(record.t), current) then
+				local killer = byKey[key]
+				if not killer then
+					killer = { key = key, tail = record.ktail, kind = record.kkind, count = 0, victims = {}, victimCount = 0 }
+					byKey[key] = killer
+				end
+				killer.count = killer.count + 1
+				if not killer.victims[guid] then
+					killer.victims[guid] = true
+					killer.victimCount = killer.victimCount + 1
+				end
+				if not killer.lastAt or record.t >= killer.lastAt then
+					killer.lastAt = record.t
+					killer.name, killer.class, killer.race = record.kname, record.kclass, record.krace
+				end
+			end
+		end
+	end
+	local rows = {}
+	for _, killer in pairs(byKey) do rows[#rows + 1] = killer end
+	table.sort(rows, function(a, b)
+		if a.count ~= b.count then return a.count > b.count end
+		return (a.lastAt or 0) > (b.lastAt or 0)
+	end)
+	if limit then
+		while #rows > limit do table.remove(rows) end
+	end
+	return rows
+end
+
+--------------------------------------------------------------------------------
+-- The feed
+--------------------------------------------------------------------------------
+
+-- The latest kills and deaths of the guild, newest first.
+function Stats.Feed(limit, bucket)
+	local key = tostring(limit) .. ":" .. tostring(bucket)
+	if cache.feed[key] then return cache.feed[key] end
+	local list = {}
+	for guid in pairs(ns.db.authors) do
+		local agg = Stats.AuthorAggregate(guid)
+		for _, kill in ipairs(agg.kills) do
+			if bucket == "all" or kill.record.bucket == bucket then
+				list[#list + 1] = { t = kill.record.t, record = kill.record, author = guid, provisional = kill.provisional }
+			end
+		end
+		for _, death in ipairs(agg.deaths) do
+			if bucket == "all" or death.record.bucket == bucket then
+				list[#list + 1] = { t = death.record.t, record = death.record, author = guid, provisional = death.provisional }
+			end
+		end
+	end
+	table.sort(list, function(a, b)
+		if a.t ~= b.t then return a.t > b.t end
+		return a.author < b.author
+	end)
+	while limit and #list > limit do table.remove(list) end
+	for _, item in ipairs(list) do item.info = Stats.AuthorInfo(item.author) end
+	cache.feed[key] = list
+	return list
+end
+
+-- The last kills of one character, newest first.
+function Stats.LastKills(guid, limit)
+	local agg = Stats.AuthorAggregate(guid)
+	local list = {}
+	for index = #agg.kills, math.max(1, #agg.kills - (limit or 5) + 1), -1 do
+		list[#list + 1] = agg.kills[index]
+	end
+	return list
+end
+
+--------------------------------------------------------------------------------
+-- Cache and wiring
+--------------------------------------------------------------------------------
+
+function Stats.Invalidate(guid)
+	if guid then cache.authors[guid] = nil else cache.authors = {} end
+	cache.guild, cache.players, cache.feed = {}, {}, {}
+	ns.Fire("StatsChanged", guid)
+end
+
+ns.Hook("RecordAdded", function(guid) Stats.Invalidate(guid) end)
+ns.Hook("RecordStored", function(guid) Stats.Invalidate(guid) end)
+ns.Hook("JournalChanged", function(guid) Stats.Invalidate(guid) end)
+ns.Hook("ProfileChanged", function() Stats.Invalidate() end)
+ns.Hook("RosterUpdated", function() cache.guild, cache.players, cache.feed = {}, {}, {} end)
+ns.Hook("Login", function()
+	Stats.RefreshAnchor()
+	-- Old complete pages are packed once at login, out of the way.
+	Util.After(COMPACT_DELAY, "compact", function()
+		local olderThan = Stats.WeekStart(Stats.CurrentWeek() - 1)
+		if Records.Compact(olderThan) > 0 then Stats.Invalidate() end
+	end)
+end)
+ns.Hook("Debug", function()
+	local guild = Stats.Guild("all", "all")
+	ns.Print(("stats: %d journal(s), %d kills, %d distinct enemy deaths, %d deaths, week %d since anchor %s"):format(
+		guild.authors, guild.kills, guild.distinct, guild.deaths, Stats.CurrentWeek(), Util.Stamp(Stats.Anchor())))
+end)
