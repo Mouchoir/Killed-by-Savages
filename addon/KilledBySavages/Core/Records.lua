@@ -25,7 +25,9 @@ local _, ns = ...
 -- A match record is the end-of-battleground scoreboard: my own row, then
 -- one line per guild teammate on the board (tail:name:kb:hk:deaths:honor,
 -- comma separated), credited to them with or without the addon. live is
--- how many of the match's HKs were already recorded live as kills.
+-- how many of the match's HKs were already recorded live as kills. A
+-- scoreboard with instanceID 0 is one outside any instance: a guild raid in
+-- the world written by hand, whose lines credit world kills.
 --
 -- lifeHK is the character's lifetime honorable kills right after the event:
 -- the server's own count, which chains the records of an author together.
@@ -503,6 +505,14 @@ function Records.AppendOwn(record, source)
 	local author = Records.Author(me.guid)
 	author.own = true
 	record.seq = (author.head or 0) + 1
+	-- A record that adds no HK carries the count the chain stands at, not
+	-- the counter of the moment: a death during the seconds an HK waits to
+	-- be matched would otherwise carry the HK of the kill written after it.
+	if Records.Gain(record) == 0 and record.type ~= "X" then
+		local previous = Records.Get(me.guid, record.seq - 1)
+		local after = previous and Records.LifeAfter(previous)
+		if type(after) == "number" then record.lifeHK = after end
+	end
 	local text = Records.Encode(record)
 	if not text then return nil end
 	author.log[record.seq] = text
@@ -512,6 +522,46 @@ function Records.AppendOwn(record, source)
 	ns.Count("records.own." .. record.type)
 	ns.Fire("RecordAdded", me.guid, record.seq, text, record, source)
 	return record.seq, text
+end
+
+-- Repairs our own journal where a record that adds no HK (a death, a
+-- backfill) carries a count the chain does not stand at: versions before
+-- 0.1.10 wrote a death during a pending kill with the kill's count, and
+-- the page then failed every member's chain check. Records that add HKs
+-- are never touched. Returns how many records were rewritten.
+function Records.HealOwn()
+	local me = ns.Identity.me
+	if not me.guid then return 0 end
+	local author = ns.db.authors[me.guid]
+	if not author or (author.head or 0) == 0 then return 0 end
+	local healed = 0
+	local previous
+	for seq = 1, author.head do
+		local text = author.log[seq]
+		local record = text and Records.Decode(text) or nil
+		if record then
+			if previous and record.seq == previous.seq + 1 and Records.Gain(record) == 0 and record.type ~= "X" then
+				local after = Records.LifeAfter(previous)
+				if type(after) == "number" and record.lifeHK ~= after then
+					local copy = {}
+					for key, value in pairs(record) do copy[key] = value end
+					copy.lifeHK = after
+					local fixed = Records.Encode(copy)
+					if fixed then
+						author.log[seq] = fixed
+						record = Records.Decode(fixed)
+						healed = healed + 1
+					end
+				end
+			end
+			previous = record
+		end
+	end
+	if healed > 0 then
+		ns.Count("records.healed", healed)
+		ns.Fire("JournalChanged", me.guid)
+	end
+	return healed
 end
 
 -- Our own profile, from what the client says now.

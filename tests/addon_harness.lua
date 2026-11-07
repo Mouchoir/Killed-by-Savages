@@ -282,6 +282,25 @@ A.fire("PLAYER_DEAD")
 advance(6)
 check("a death to a creature is not recorded", #Journal(A) == before and A.counter("detect.deathNotPvp") == 1)
 
+-- A death in the seconds an HK still waits to be matched: the death is
+-- written first and must carry the count the chain stands at, not the
+-- counter already moved by the kill written after it.
+local beforePending = A.state.lifetime
+GainHK(A)
+A.state.recap = { {
+	sourceName = "Gruk Bonecrusher", sourceGUID = HORDE[1].guid, sourceFlags = 0x548,
+	destName = "Aldric Stormhand", destGUID = A.guid, spellName = "Frappe mortelle", spellId = 12294,
+} }
+A.state.recapReadyAt = Mock.Now()
+A.fire("PLAYER_DEAD")
+advance(6)
+local journalA = Journal(A)
+local pendingDeath, pendingKill = journalA[#journalA - 1], journalA[#journalA]
+check("a death during a pending kill comes first with the count before the kill", pendingDeath.type == "D" and pendingKill.type == "K"
+	and pendingDeath.lifeHK == beforePending and pendingKill.lifeHK == beforePending + 1 and Records.CheckChain(journalA) == true,
+	("%s %s / %s %s"):format(pendingDeath.type, tostring(pendingDeath.lifeHK), pendingKill.type, tostring(pendingKill.lifeHK)))
+
+before = #Journal(A)
 A.state.recap = nil
 A.fire("PLAYER_DEAD")
 advance(12)
@@ -707,8 +726,8 @@ check("with how many members killed it", victims[1].byCount >= 1 and victims[1].
 local mine = Stats.Victims("all", "all", { guid = A.guid })
 check("a character's own board is a subset", #mine <= #Stats.Victims("all", "all"))
 local killers = Stats.Killers("all", "all", nil, 5)
-check("our killers are listed from the deaths, battlegrounds included", #killers == 3 and killers[1].count == 1
-	and (killers[1].name == "Vexa Cinderhorn" or killers[1].name == "Gruk Bonecrusher" or killers[1].name == "Schwarzesau"), #killers)
+check("our killers are listed from the deaths, battlegrounds included", #killers == 3 and killers[1].count == 2
+	and killers[1].name == "Gruk Bonecrusher", #killers)
 local feed = Stats.Feed(10, "all")
 check("the feed is newest first with the author's name", feed[1] and feed[1].t >= feed[2].t and feed[1].info and feed[1].info.name ~= nil)
 local milestone = Stats.Milestone()
@@ -1058,6 +1077,106 @@ check("backfill past the addon's first count is refused whole", #Journal(K) == 1
 	and K.db().characters[K.guid].imported == nil, #Journal(K))
 K.slash("import")
 check("/kbs import says the counts do not fit", K.said("ne colle pas"))
+
+-- A scoreboard outside any instance (instanceID 0): a guild raid in the
+-- world, written by hand for members who had neither the probe nor the
+-- addon. Its lines credit world kills, by tail; the guild's distinct deaths
+-- do not move, the witnesses' journals already count them.
+Mock.AddPlayer(Guid(13), { name = "Maren Holt", class = "PRIEST", race = "Dwarf", faction = "Alliance" })
+Mock.AddPlayer(Guid(14), { name = "Tobin Ashgrove", class = "WARLOCK", race = "Human", faction = "Alliance" })
+Mock.SetGuildRoster({ { guid = A.guid, rank = 0 }, { guid = B.guid, rank = 2 }, { guid = C.guid, rank = 4 }, { guid = Guid(5), rank = 3 },
+	{ guid = D.guid, rank = 3 }, { guid = E.guid, rank = 3 }, { guid = F.guid, rank = 3 }, { guid = G.guid, rank = 3 }, { guid = H.guid, rank = 3 },
+	{ guid = I.guid, rank = 3 }, { guid = J.guid, rank = 3 }, { guid = K.guid, rank = 3 }, { guid = Guid(13), rank = 5 }, { guid = Guid(14), rank = 5 } })
+RefreshRosters()
+if not B.online then
+	B.login()
+	advance(20)
+end
+local distinctBefore = { w = A.ns.Stats.Guild("week", "w").distinct, b = A.ns.Stats.Guild("week", "b").distinct }
+A.ns.Records.AppendOwn({
+	type = "M", t = Mock.Server() - 600, instanceID = 0, duration = 9000, hk = 0, kb = 0, deaths = 0, honor = 0, live = 0, mapID = 1442,
+	lifeHK = A.ns.Records.LifeAfter(Last(A)),
+	lines = {
+		{ tail = A.ns.Util.Tail(Guid(13)), name = "Maren Holt", kb = 0, hk = 7, deaths = 0, honor = 0 },
+		{ tail = A.ns.Util.Tail(Guid(14)), name = "Tobin Ashgrove", kb = 0, hk = 7, deaths = 0, honor = 0 },
+	},
+})
+advance(5)
+check("a world scoreboard credits its lines in the world", A.ns.Stats.Character(Guid(13), "week", "w").kills == 7
+	and A.ns.Stats.Character(Guid(13), "week", "b").kills == 0 and A.ns.Stats.Character(Guid(14), "week", "all").kills == 7
+	and A.ns.Stats.Character(Guid(14), "week", "all").kb == 0, A.ns.Stats.Character(Guid(13), "week", "w").kills)
+check("the credited members are listed under the world filter", (function()
+	for _, row in ipairs(A.ns.Stats.Characters("week", "w")) do
+		if row.guid == Guid(13) and row.kills == 7 and row.name == "Maren Holt" then return true end
+	end
+	return false
+end)())
+check("the chain holds and the guild's distinct deaths do not move", A.ns.Records.CheckChain(Journal(A)) == true
+	and A.ns.Stats.Guild("week", "w").distinct == distinctBefore.w and A.ns.Stats.Guild("week", "b").distinct == distinctBefore.b,
+	A.ns.Stats.Guild("week", "w").distinct .. "/" .. distinctBefore.w)
+advance(10)
+check("a member reads the raid credit the same", B.ns.Stats.Character(Guid(13), "week", "w").kills == 7
+	and B.ns.Stats.Character(Guid(14), "week", "b").kills == 0, B.ns.Stats.Character(Guid(13), "week", "w").kills)
+
+-- A journal written by a version that gave a death during a pending kill
+-- the kill's count: its page failed every member's chain check. At login
+-- the author repairs it; records that add HKs are never touched.
+local Lc = NewClient({ name = "Lysander Crane", guid = Guid(15), class = "DRUID", guild = "Savages", lifetime = 12, rank = 3 })
+local Mc = NewClient({ name = "Marcus Thorne", guid = Guid(16), class = "WARRIOR", guild = "Savages", lifetime = 8, rank = 3 })
+Mock.SetGuildRoster({ { guid = A.guid, rank = 0 }, { guid = B.guid, rank = 2 }, { guid = C.guid, rank = 4 }, { guid = Guid(5), rank = 3 },
+	{ guid = D.guid, rank = 3 }, { guid = E.guid, rank = 3 }, { guid = F.guid, rank = 3 }, { guid = G.guid, rank = 3 }, { guid = H.guid, rank = 3 },
+	{ guid = I.guid, rank = 3 }, { guid = J.guid, rank = 3 }, { guid = K.guid, rank = 3 }, { guid = Guid(13), rank = 5 }, { guid = Guid(14), rank = 5 },
+	{ guid = Lc.guid, rank = 3 }, { guid = Mc.guid, rank = 3 } })
+RefreshRosters()
+Lc.login()
+advance(20)
+Lc.state.target = HORDE[4].guid
+Lc.fire("PARTY_KILL", Lc.guid, HORDE[4].guid)
+Lc.fire("UNIT_DIED", HORDE[4].guid)
+GainHK(Lc)
+advance(5)
+Lc.logout()
+local lJournal = Lc.saved.authors[Lc.guid]
+local brokenDeath = Lc.ns.Records.Encode({
+	type = "D", seq = 2, t = Mock.Server() - 30, bucket = "w", kkind = "p", ktail = Lc.ns.Util.Tail(HORDE[1].guid), kname = HORDE[1].name,
+	kclass = HORDE[1].class, krace = HORDE[1].race, lifeHK = 14,
+})
+lJournal.log[2] = brokenDeath
+lJournal.head, lJournal.count, lJournal.confirmedHead = 2, 2, 2
+Lc.login()
+advance(5)
+local healedDeath = Lc.ns.Records.Get(Lc.guid, 2)
+check("the author repairs a death that carried the wrong count", healedDeath and healedDeath.lifeHK == 13 and Lc.counter("records.healed") == 1
+	and Lc.ns.Records.CheckChain(Journal(Lc)) == true, healedDeath and healedDeath.lifeHK)
+local badKill = Lc.ns.Records.Encode({ type = "K", seq = 3, t = Mock.Server(), bucket = "w", how = "unk", lifeHK = 20 })
+Lc.db().authors[Lc.guid].log[3] = badKill
+Lc.db().authors[Lc.guid].head, Lc.db().authors[Lc.guid].count = 3, 3
+check("a kill with a wrong count is never rewritten", Lc.ns.Records.HealOwn() == 0 and Lc.db().authors[Lc.guid].log[3] == badKill)
+Lc.db().authors[Lc.guid].log[3] = nil
+Lc.db().authors[Lc.guid].head, Lc.db().authors[Lc.guid].count = 2, 2
+advance(120)
+check("the repaired page is taken by a member", Held(A, Lc) == 2 and A.ns.Records.Get(Lc.guid, 2).lifeHK == 13, Held(A, Lc))
+
+-- A relayed page that breaks the chain: its holder is set aside for a
+-- while, without error, the page comes from another holder, and the
+-- records around the break are kept for /kbs debug.
+Lc.logout()
+advance(5)
+B.db().authors[Lc.guid].log[2] = brokenDeath
+local lTail = Lc.ns.Util.Tail(Lc.guid)
+Mc.login()
+advance(1)
+Mc.ns.Sync.State().holders[lTail] = { ["brenna ironvale"] = { head = 2, count = 2, at = Mock.Server() } }
+Mc.ns.Sync.Schedule()
+advance(60)
+check("a page that breaks the chain is refused and its holder set aside", Mc.counter("sync.pageChainBroken") == 1
+	and Mc.db().debug.lastChainBreak and Mc.db().debug.lastChainBreak.seq == 2 and #Mc.db().debug.lastChainBreak.around == 2,
+	Mc.counter("sync.pageChainBroken"))
+Mc.fire("GUILD_ROSTER_UPDATE")
+advance(120)
+check("the journal comes from another holder and nothing errored", Held(Mc, Lc) == 2 and Mc.ns.Records.Get(Lc.guid, 2).lifeHK == 13
+	and #Mc.db().errors == 0, ("%d held, %d errors"):format(Held(Mc, Lc), #Mc.db().errors))
+B.db().authors[Lc.guid].log[2] = A.db().authors[Lc.guid].log[2]
 
 -- A member whose probe was older than 0.1.3: its file matched nothing, has
 -- no assists ring and no place or subzone on the HKs. The import matches

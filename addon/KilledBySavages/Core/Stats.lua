@@ -206,7 +206,13 @@ local function MatchCredits()
 				local key = Records.MatchKey(record)
 				local match = credits.matches[key]
 				if not match then
-					match = { t = record.t, week = Stats.WeekIndex(record.t), instanceID = record.instanceID, lines = {} }
+					-- A scoreboard outside any instance (instanceID 0) is a guild
+					-- raid in the world, written by hand: its lines credit world
+					-- kills instead of battleground ones.
+					match = {
+						t = record.t, week = Stats.WeekIndex(record.t), instanceID = record.instanceID,
+						world = record.instanceID == 0, lines = {},
+					}
 					credits.matches[key] = match
 				end
 				if authorTail then
@@ -227,11 +233,12 @@ local function MatchCredits()
 				byWeek = {}
 				credits.byTail[tail] = byWeek
 			end
-			local counts = byWeek[match.week]
-			if not counts then
-				counts = NewCounts()
-				byWeek[match.week] = counts
+			local weekly = byWeek[match.week]
+			if not weekly then
+				weekly = { b = NewCounts(), w = NewCounts() }
+				byWeek[match.week] = weekly
 			end
+			local counts = weekly[match.world and "w" or "b"]
 			counts.hk = counts.hk + (line.hk or 0)
 			counts.kb = counts.kb + (line.kb or 0)
 			counts.deaths = counts.deaths + (line.deaths or 0)
@@ -284,10 +291,17 @@ function Stats.Character(guid, period, bucket)
 			end
 		end
 	end
-	if bucket == "b" or bucket == "all" then
-		local byWeek = MatchCredits().byTail[Util.Tail(guid) or ""]
-		for week, counts in pairs(byWeek or {}) do
-			if InPeriod(period, week, current) then Add(sum, counts) end
+	-- Scoreboard credits: battleground boards, and the hand-written world
+	-- ones, each in its bucket.
+	local byWeek = MatchCredits().byTail[Util.Tail(guid) or ""]
+	for week, weekly in pairs(byWeek or {}) do
+		if InPeriod(period, week, current) then
+			if bucket == "all" then
+				Add(sum, weekly.b)
+				Add(sum, weekly.w)
+			elseif weekly[bucket] then
+				Add(sum, weekly[bucket])
+			end
 		end
 	end
 	sum.provisional = agg.provisional
@@ -488,7 +502,9 @@ function Stats.Guild(period, bucket)
 	if bucket ~= "w" then
 		local current = Stats.CurrentWeek()
 		for _, match in pairs(MatchCredits().matches) do
-			if InPeriod(period, match.week, current) then
+			-- A world scoreboard's deaths are already counted from the
+			-- witnesses' kill records.
+			if not match.world and InPeriod(period, match.week, current) then
 				for _, line in pairs(match.lines) do sum.distinct = sum.distinct + (line.kb or 0) end
 			end
 		end

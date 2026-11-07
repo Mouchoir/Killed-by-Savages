@@ -399,7 +399,7 @@ end
 -- it was busy, a little later.
 local function Unavailable(failed, canon)
 	local failedAt = failed[canon]
-	if failedAt ~= nil and Now() - failedAt < FAIL_RETRY then return true end
+	if type(failedAt) == "number" and Now() - failedAt < FAIL_RETRY then return true end
 	return (busyUntil[canon] or 0) > Now()
 end
 
@@ -617,8 +617,14 @@ local function StorePage(sender, tail, page, text)
 	local okChain, breakAt = Records.CheckChain(chain)
 	if not okChain then
 		ns.Count("sync.pageChainBroken")
-		failedHolders(tail)[Identity.Canon(sender)] = true
-		ns.db.debug.lastChainBreak = { tail = tail, page = page, seq = breakAt, from = sender, at = Now() }
+		failedHolders(tail)[Identity.Canon(sender)] = Now()
+		-- The records around the break, for /kbs debug.
+		local around = {}
+		for _, item in ipairs(chain) do
+			if math.abs((item.seq or 0) - breakAt) <= 1 then around[#around + 1] = Records.Encode(item) end
+		end
+		table.sort(around)
+		ns.db.debug.lastChainBreak = { tail = tail, page = page, seq = breakAt, from = sender, at = Now(), around = around }
 		return false
 	end
 	local added = 0
@@ -1110,6 +1116,12 @@ ns.Hook("Debug", function()
 		end
 	end
 	ns.Print(("sync: %d unconfirmed record(s)"):format(unconfirmed))
+	local brk = ns.db.debug.lastChainBreak
+	if brk then
+		ns.Print(("sync: last chain break on %s page %s at seq %s, served by %s, %s"):format(tostring(brk.tail), tostring(brk.page),
+			tostring(brk.seq), tostring(brk.from), Util.Stamp(brk.at, true)))
+		for _, line in ipairs(brk.around or {}) do ns.Print("  " .. line) end
+	end
 end)
 
 -- For tests and the debug command.

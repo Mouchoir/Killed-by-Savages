@@ -310,8 +310,10 @@ function Detect.Start()
 	-- existed; it sets the baseline itself.
 	if ns.Import then Util.Guard("import", ns.Import.AtLogin, lifeHK) end
 	-- HKs left unmatched by the last session belong before anything the
-	-- counter did since: they are settled first.
+	-- counter did since: they are settled first. Then the journal is
+	-- repaired where an older version broke its own chain.
 	ResolvePending()
+	Records.HealOwn()
 	if char.baselineHK == nil then
 		-- First run on this character: everything before is not ours to count.
 		char.baselineHK = lifeHK
