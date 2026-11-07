@@ -1,12 +1,17 @@
-name: Publish to CurseForge
+name: Publish
+
+# A pushed tag v<version> releases: the zip is built from the tag, a GitHub
+# release is created with the zip attached (Wago Addons imports it through
+# the release automation of the connected repository), then the zip goes to
+# CurseForge. A manual run packages an existing tag again.
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag to package and upload
+        description: Existing tag to package and upload again
         required: true
         type: string
       release_type:
@@ -20,78 +25,120 @@ on:
           - alpha
 
 permissions:
-  contents: write # the zip is attached to the release
+  contents: write # the release is created here, with the zip attached
 
 env:
   ADDON_NAME: KilledBySavages
   ADDON_SOURCE: addon/KilledBySavages
   CURSEFORGE_BASE_URL: https://wow.curseforge.com
-  # The CurseForge project: https://www.curseforge.com/wow/addons/killed-by-savages
   CURSEFORGE_PROJECT_ID: "1790222"
-  # WoW Forever only: interface 16001 -> CurseForge game version 1.60.1.
+  # Each TOC listed here maps its Interface number to a CurseForge game version.
   PUBLISH_TOCS: KilledBySavages.toc
 
 jobs:
   publish:
-    name: Upload addon package
+    name: Release and upload
     runs-on: ubuntu-latest
 
     steps:
-      - name: Resolve release metadata
+      - name: Resolve the tag and the release type
         id: release
         shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_RELEASE_TYPE: ${{ inputs.release_type }}
         run: |
-          # Write the changelog outside the workspace so the checkout step below
-          # (which cleans the working directory) does not delete it.
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            tag="$(jq -r '.release.tag_name' "$GITHUB_EVENT_PATH")"
-            prerelease="$(jq -r '.release.prerelease' "$GITHUB_EVENT_PATH")"
-            jq -r '.release.body // ""' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/CHANGELOG.md"
-
-            if [[ "$prerelease" == "true" ]]; then
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            tag="$GITHUB_REF_NAME"
+            # A 0.x version or a -beta suffix is a beta, -alpha an alpha, the rest a release.
+            if [[ "$tag" == *-alpha* ]]; then
+              release_type="alpha"
+            elif [[ "$tag" =~ ^v0\. || "$tag" == *-beta* ]]; then
               release_type="beta"
             else
               release_type="release"
             fi
           else
-            tag="${{ inputs.tag }}"
-            release_type="${{ inputs.release_type }}"
-            printf 'Manual CurseForge upload for %s\n' "$tag" > "$RUNNER_TEMP/CHANGELOG.md"
+            tag="$INPUT_TAG"
+            release_type="$INPUT_RELEASE_TYPE"
           fi
-
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release_type=$release_type" >> "$GITHUB_OUTPUT"
 
-      - name: Check out release tag
+      - name: Check out the tag
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.release.outputs.tag }}
 
       - name: Build addon zip
+        id: build
         shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           rm -rf dist
           mkdir -p "dist/${ADDON_NAME}"
-          # The addon lives under addon/<name>/; package only that folder so the
-          # zip has a single top-level <name>/ directory as WoW expects.
+          # Only the addon folder goes in, so the zip has a single top-level
+          # <name>/ directory as WoW expects.
           rsync -a \
             --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.gitignore' \
+            --exclude='.gitattributes' \
             --exclude='*.zip' \
+            --exclude='dist/' \
             "${ADDON_SOURCE}/" "dist/${ADDON_NAME}/"
-          cd dist
-          zip -r "${ADDON_NAME}-${{ steps.release.outputs.tag }}.zip" "${ADDON_NAME}"
+          (cd dist && zip -r "${ADDON_NAME}-${TAG}.zip" "${ADDON_NAME}")
 
-      - name: Attach the zip to the GitHub release
-        if: github.event_name == 'release'
+          # The release assets Wago Addons imports. One flavour: the zip as is.
+          # Several flavours (one TOC each): a copy of the zip per flavour,
+          # named as Wago's "Multiple" game versions expect (-classic.zip,
+          # -mists.zip, -forever.zip, ... and no suffix for Retail).
+          suffixes=()
+          for toc_name in ${PUBLISH_TOCS}; do
+            iface="$(grep -iE '^## Interface:' "${ADDON_SOURCE}/${toc_name}" | grep -oE '[0-9]+' | head -1)"
+            if (( 10#$iface >= 100000 )); then suffix=""
+            elif (( 10#$iface >= 50000 )); then suffix="-mists"
+            elif (( 10#$iface >= 40000 )); then suffix="-cata"
+            elif (( 10#$iface >= 30000 )); then suffix="-wrath"
+            elif (( 10#$iface >= 20000 )); then suffix="-bcc"
+            elif (( 10#$iface >= 16000 )); then suffix="-forever"
+            else suffix="-classic"; fi
+            suffixes+=("$suffix")
+          done
+          assets=()
+          if (( ${#suffixes[@]} <= 1 )); then
+            assets+=("dist/${ADDON_NAME}-${TAG}.zip")
+          else
+            for suffix in "${suffixes[@]}"; do
+              cp "dist/${ADDON_NAME}-${TAG}.zip" "dist/${ADDON_NAME}-${TAG}${suffix}.zip"
+              assets+=("dist/${ADDON_NAME}-${TAG}${suffix}.zip")
+            done
+          fi
+          echo "assets=${assets[*]}" >> "$GITHUB_OUTPUT"
+          echo "release assets: ${assets[*]}"
+
+      - name: Create the GitHub release with the zip
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TYPE: ${{ steps.release.outputs.release_type }}
+          ASSETS: ${{ steps.build.outputs.assets }}
         run: |
-          # The release page gets a download for players, and Wago Addons
-          # (release automation on the connected repository) imports it.
-          gh release upload "${{ steps.release.outputs.tag }}" \
-            "dist/${ADDON_NAME}-${{ steps.release.outputs.tag }}.zip" \
-            --clobber --repo "$GITHUB_REPOSITORY"
+          read -r -a assets <<<"$ASSETS"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            flags=()
+            if [[ "$RELEASE_TYPE" != "release" ]]; then flags+=(--prerelease); fi
+            # The zip is attached from the start, so Wago Addons sees it with
+            # the release event. The notes list the commits since the last tag.
+            gh release create "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes "${flags[@]}"
+          fi
+          # The release notes are the CurseForge changelog.
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' > "$RUNNER_TEMP/CHANGELOG.md"
+          if [[ ! -s "$RUNNER_TEMP/CHANGELOG.md" ]]; then printf 'Release %s\n' "$TAG" > "$RUNNER_TEMP/CHANGELOG.md"; fi
 
       - name: Prepare CurseForge metadata
         shell: bash
@@ -161,11 +208,6 @@ jobs:
         env:
           CURSEFORGE_API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
         run: |
-          if [[ -z "$CURSEFORGE_API_TOKEN" ]]; then
-            echo "Missing CURSEFORGE_API_TOKEN repository secret." >&2
-            exit 1
-          fi
-
           curl --fail-with-body \
             --header "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
             --form "metadata=<metadata.json;type=application/json" \
