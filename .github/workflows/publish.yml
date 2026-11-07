@@ -32,8 +32,11 @@ env:
   ADDON_SOURCE: addon/KilledBySavages
   CURSEFORGE_BASE_URL: https://wow.curseforge.com
   CURSEFORGE_PROJECT_ID: "1790222"
-  # Each TOC listed here maps its Interface number to a CurseForge game version.
+  # Each TOC listed here maps its Interface number to a game version on
+  # CurseForge and on Wago.
   PUBLISH_TOCS: KilledBySavages.toc
+  # The Wago Addons project; the upload needs the WAGO_API_TOKEN secret too.
+  WAGO_PROJECT_ID: E6gz74N1
 
 jobs:
   publish:
@@ -213,3 +216,48 @@ jobs:
             --form "metadata=<metadata.json;type=application/json" \
             --form "file=@dist/${ADDON_NAME}-${{ steps.release.outputs.tag }}.zip" \
             "${CURSEFORGE_BASE_URL}/api/projects/${CURSEFORGE_PROJECT_ID}/upload-file"
+
+      - name: Upload to Wago Addons
+        shell: bash
+        env:
+          WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TYPE: ${{ steps.release.outputs.release_type }}
+        run: |
+          if [[ -z "$WAGO_PROJECT_ID" || -z "$WAGO_API_TOKEN" ]]; then
+            echo "Wago upload skipped: WAGO_PROJECT_ID (workflow) or the WAGO_API_TOKEN secret is missing."
+            exit 0
+          fi
+          # One patch per published TOC, under the flavour key Wago expects
+          # (addons.wago.io/api/data/game lists the valid patches).
+          args=()
+          for toc_name in ${PUBLISH_TOCS}; do
+            iface="$(grep -iE '^## Interface:' "${ADDON_SOURCE}/${toc_name}" | grep -oE '[0-9]+' | head -1)"
+            version_string="$((10#$iface / 10000)).$((10#$iface / 100 % 100)).$((10#$iface % 100))"
+            if (( 10#$iface >= 100000 )); then flavour=retail
+            elif (( 10#$iface >= 50000 )); then flavour=mop
+            elif (( 10#$iface >= 40000 )); then flavour=cata
+            elif (( 10#$iface >= 30000 )); then flavour=wotlk
+            elif (( 10#$iface >= 20000 )); then flavour=bc
+            elif (( 10#$iface >= 16000 )); then flavour=forever
+            else flavour=classic; fi
+            args+=(--arg "$flavour" "$version_string")
+          done
+          case "$RELEASE_TYPE" in
+            release) stability=stable ;;
+            *) stability="$RELEASE_TYPE" ;;
+          esac
+          jq -n \
+            --rawfile changelog "$RUNNER_TEMP/CHANGELOG.md" \
+            --arg label "$TAG" \
+            --arg stability "$stability" \
+            "${args[@]}" \
+            '{ label: $label, stability: $stability, changelog: $changelog }
+             + ($ARGS.named | del(.changelog, .label, .stability) | with_entries(.key |= "supported_\(.)_patches" | .value |= [.]))' > wago.json
+          echo "wago.json:"; jq 'del(.changelog)' wago.json
+          curl --fail-with-body \
+            --header "Authorization: Bearer ${WAGO_API_TOKEN}" \
+            --header "Accept: application/json" \
+            --form "metadata=<wago.json;type=application/json" \
+            --form "file=@dist/${ADDON_NAME}-${TAG}.zip" \
+            "https://addons.wago.io/api/projects/${WAGO_PROJECT_ID}/version"

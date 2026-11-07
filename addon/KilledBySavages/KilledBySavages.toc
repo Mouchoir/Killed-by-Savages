@@ -5,6 +5,7 @@
 ## Notes-frFR: Tableau de chasse de guilde pour World of Warcraft: Forever. Compte les ennemis tués par chaque membre, par joueur (tous personnages réunis), par personnage et pour toute la guilde, en monde ouvert et en champ de bataille.
 ## Author: Mouchoir
 ## Version: 0.1.11
+## X-Wago-ID: E6gz74N1
 ## X-License: GPL-3.0-or-later
 ## X-Website: https://github.com/Mouchoir/Killed-by-Savages
 ## X-Curse-Project-ID: 1790222
