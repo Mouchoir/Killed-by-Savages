@@ -23,6 +23,7 @@ local _, ns = ...
 --------------------------------------------------------------------------------
 
 local Util = ns.Util
+local L = ns.L
 local Clean, Now = Util.Clean, Util.Now
 local Records = ns.Records
 local Identity = ns.Identity
@@ -72,6 +73,11 @@ local outPages = 0
 local inventorySent = false
 local recovery                    -- { from, to, until } while a crash is being recovered
 local lastHeadAnnounced
+local helloDueAt                  -- when the login hello goes out, until it does
+local pagesIn = 0                 -- pages stored this session
+local lastPageAt
+local heldAtLogin                 -- other journals held when this session began
+local firstPagesSaid = false
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -228,8 +234,10 @@ function Sync.SendHello(reason)
 	local me = Me()
 	if not Identity.InGuild() or not me.tail then return false end
 	local char = Char()
+	helloDueAt = nil
 	if reason ~= "recovery" and reason ~= "import" and Now() - (char.lastHello or 0) < HELLO_MIN_GAP then
 		ns.Count("sync.helloSkipped")
+		ns.Fire("SyncChanged")
 		return false
 	end
 	char.lastHello = Now()
@@ -241,6 +249,7 @@ function Sync.SendHello(reason)
 	local profile = Records.OwnProfile()
 	SendGuild("P", ("P^%s^%s"):format(me.tail, Records.EncodeProfile(profile)))
 	ns.Count("sync.hello." .. tostring(reason))
+	ns.Fire("SyncChanged")
 	return true
 end
 
@@ -381,6 +390,7 @@ local function SendRequest(tail, page, holder)
 		requests[key] = nil
 	end)
 	ns.Count("sync.request")
+	ns.Fire("SyncChanged")
 end
 
 -- A holder that failed us gets another chance after a while; one that said
@@ -620,7 +630,14 @@ local function StorePage(sender, tail, page, text)
 		author.profileVerified = fromAuthor or nil
 	end
 	ns.Count("sync.pageStored")
+	pagesIn, lastPageAt = pagesIn + 1, Now()
 	if added > 0 then ns.Fire("JournalChanged", guid) end
+	-- A member who held nothing of the guild hears once that it is coming in.
+	if added > 0 and guid ~= Me().guid and heldAtLogin == 0 and not firstPagesSaid then
+		firstPagesSaid = true
+		ns.Print(L.SYNC_FIRST_PAGES)
+	end
+	ns.Fire("SyncChanged")
 	return true
 end
 
@@ -967,11 +984,60 @@ end
 -- Wiring
 --------------------------------------------------------------------------------
 
+-- The journals of other characters we hold something of.
+local function HeldOthers()
+	local n = 0
+	local mine = Me().guid
+	for guid, author in pairs(ns.db.authors) do
+		if guid ~= mine and (author.head or 0) > 0 then n = n + 1 end
+	end
+	return n
+end
+
+-- Members with the addon around: a hello this session, unless the roster
+-- says they left since.
+local function PeersAround()
+	local n = 0
+	for _, peer in pairs(peers) do
+		local member = Identity.MemberByTail(peer.tail)
+		if Now() - peer.at < ONLINE_WINDOW and not (member and member.online == false) then n = n + 1 end
+	end
+	return n
+end
+
+-- Where the sync stands, for the window's footer and /kbs status.
+function Sync.Status()
+	local status = { peers = PeersAround(), held = HeldOthers(), pagesIn = pagesIn, lastPageAt = lastPageAt, queue = #queue }
+	local inFlight, parts = 0, 0
+	for _ in pairs(requests) do inFlight = inFlight + 1 end
+	for _ in pairs(partial) do parts = parts + 1 end
+	status.requests, status.partial = inFlight, parts
+	if not Identity.InGuild() then
+		status.phase = "noguild"
+	elseif recovery then
+		status.phase = "recovery"
+	elseif ChatBlocked() then
+		status.phase = "paused"
+	elseif helloDueAt then
+		status.phase = "waiting"
+		status.helloIn = math.max(0, helloDueAt - Now())
+	elseif inFlight > 0 or parts > 0 or next(advancePending) ~= nil or #queue > 0 then
+		status.phase = "busy"
+	else
+		status.phase = "idle"
+	end
+	return status
+end
+
 local function OnLogin()
 	if C_ChatInfo and Util.Fn(C_ChatInfo.RegisterAddonMessagePrefix) then
 		Util.Call(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX)
 	end
-	Util.After(Jitter(HELLO_DELAY_MIN, HELLO_DELAY_MAX), "hello", function()
+	heldAtLogin = HeldOthers()
+	local delay = Jitter(HELLO_DELAY_MIN, HELLO_DELAY_MAX)
+	helloDueAt = Now() + delay
+	Util.After(delay, "hello", function()
+		helloDueAt = nil
 		if recovery then return end
 		Sync.SendHello("login")
 		Sync.SendInventory()

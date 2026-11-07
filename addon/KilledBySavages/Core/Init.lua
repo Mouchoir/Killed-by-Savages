@@ -125,6 +125,7 @@ local function Status()
 		ns.Print(L.STATUS_NO_GUILD)
 	end
 	ns.Print(me.bnetHash and L.STATUS_PLAYER_KEY_BNET or L.STATUS_PLAYER_KEY_FALLBACK)
+	if ns.Sync and ns.UI and ns.UI.SyncText then ns.Print(ns.UI.SyncText(ns.Sync.Status())) end
 	local imported = me.guid and ns.Db.Character(me.guid).imported
 	if imported then ns.Print(L.IMPORT_ALREADY:format(imported.records or 0)) end
 	local errors = #ns.db.errors

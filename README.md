@@ -58,6 +58,12 @@ and the chain, and are dropped if the author's own count contradicts them.
 Options: minimap button, chat announcements of guild kills, window scale. The
 display name of a player is set in the Me tab.
 
+The window's footer says where the sync with the guild stands: the seconds
+before the login announcement, the pages coming in, or how many journals are
+held and how many members with the addon are around. `/kbs status` prints
+the same line. A member who held nothing of the guild is told once in chat
+when the first journals arrive.
+
 ## Import from the probe
 
 A character that ran the probe (below) before installing the addon does not

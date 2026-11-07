@@ -21,6 +21,7 @@ local WIDTH, HEIGHT = 820, 560
 local TITLE_BAR = 21
 local PAD = Theme.PAD
 local BAND = 48
+local FOOTER = 14
 local NAME = "KilledBySavagesFrame"
 
 UI.tabs = {}
@@ -57,6 +58,25 @@ local function RestorePosition()
 	else
 		frame:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
 	end
+end
+
+-- One line on where the sync with the guild stands, for the footer and
+-- /kbs status: what is coming, what is here, who is around.
+function UI.SyncText(status)
+	if status.phase == "noguild" then return L.SYNC_NO_GUILD end
+	if status.phase == "recovery" then return L.SYNC_RECOVERY end
+	if status.phase == "paused" then return L.SYNC_PAUSED end
+	if status.phase == "waiting" then return L.SYNC_WAITING:format(math.ceil(status.helloIn or 0)) end
+	if status.phase == "busy" then return L.SYNC_BUSY:format(status.pagesIn or 0, status.requests or 0) end
+	if (status.peers or 0) == 0 and (status.held or 0) == 0 then return L.SYNC_ALONE end
+	return L.SYNC_IDLE:format(status.held or 0, status.peers or 0)
+end
+
+local function RefreshFooter()
+	if not frame or not frame.footer or not ns.Sync then return end
+	local status = ns.Sync.Status()
+	frame.footer:SetText(UI.SyncText(status))
+	frame.footer:SetTextColor(Theme.Color(status.phase == "busy" and "title" or "muted"))
 end
 
 local function BuildShell()
@@ -221,9 +241,26 @@ local function BuildShell()
 	-- Content
 	local content = CreateFrame("Frame", nil, frame)
 	content:SetPoint("TOPLEFT", band, "BOTTOMLEFT", 0, -10)
-	content:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, PAD - 4)
+	content:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, PAD - 4 + FOOTER)
 	frame.content = content
 	frame.tabFrames = {}
+
+	-- Footer: where the sync with the guild stands, kept current while shown.
+	local footer = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	footer:SetPoint("BOTTOMLEFT", PAD + 2, PAD - 7)
+	footer:SetPoint("BOTTOMRIGHT", -PAD - 2, PAD - 7)
+	footer:SetJustifyH("LEFT")
+	footer:SetWordWrap(false)
+	footer:SetTextColor(Theme.Color("muted"))
+	frame.footer = footer
+	local sinceTick = 0
+	frame:SetScript("OnUpdate", function(_, elapsed)
+		sinceTick = sinceTick + (tonumber(elapsed) or 0)
+		if sinceTick >= 1 then
+			sinceTick = 0
+			Util.Guard("footer", RefreshFooter)
+		end
+	end)
 
 	if type(UISpecialFrames) == "table" then
 		table.insert(UISpecialFrames, NAME)
@@ -282,6 +319,7 @@ end
 function UI.Refresh()
 	if not frame or not frame:IsShown() then return end
 	Util.Guard("band", RefreshBand)
+	Util.Guard("footer", RefreshFooter)
 	local tabFrame = TabFrame(state.tab)
 	local definition = UI.tabs[state.tab]
 	if tabFrame and definition then
@@ -389,6 +427,12 @@ local function Announce(guid, _, record)
 	end
 end
 
+local function FooterNow()
+	if frame and frame:IsShown() then Util.Guard("footer", RefreshFooter) end
+end
+
 ns.Hook("StatsChanged", QueueRefresh)
 ns.Hook("RosterUpdated", QueueRefresh)
 ns.Hook("RecordStored", Announce)
+ns.Hook("SyncChanged", FooterNow)
+ns.Hook("PeerSeen", FooterNow)

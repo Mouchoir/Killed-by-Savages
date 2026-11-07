@@ -878,6 +878,9 @@ F.probe = probe
 mark = #network.sent
 F.login()
 advance(5)
+local fStatus = F.ns.Sync.Status()
+check("a newcomer is told the sync is coming", fStatus.phase == "waiting" and fStatus.helloIn > 20 and fStatus.helloIn <= 60
+	and F.ns.UI.SyncText(fStatus):find("dans %d+ s") ~= nil, fStatus.phase)
 local imported = Journal(F)
 local fChar = F.db().characters[F.guid]
 check("the probe's records of this character came in at login", #imported == 16 and F.said("repris de la sonde"), #imported)
@@ -926,6 +929,9 @@ check("and the newcomer takes the journals the others hold", Held(F, A) == Held(
 		F.counter("sync.request"), F.counter("sync.requestTimeout"), F.counter("sync.pageBusy")))
 check("a holder with enough going out says so instead of staying silent", F.counter("sync.pageBusy") >= 1 and F.counter("sync.requestTimeout") == 0,
 	F.counter("sync.pageBusy") .. "/" .. F.counter("sync.requestTimeout"))
+fStatus = F.ns.Sync.Status()
+check("then that it is up to date, the first journals announced once in chat", fStatus.phase == "idle" and fStatus.held >= 2 and fStatus.pagesIn >= 2
+	and F.said("Premiers journaux de guilde") and F.ns.UI.SyncText(fStatus):find("À jour") ~= nil, fStatus.phase .. "/" .. fStatus.held)
 F.logout()
 F.login()
 advance(5)
@@ -1039,6 +1045,8 @@ A.slash("")
 local window = A.env.KilledBySavagesFrame
 check("/kbs opens the window", window ~= nil and window.shown == true)
 check("the window registers for ESC", A.env.UISpecialFrames[1] == "KilledBySavagesFrame")
+check("the footer says where the sync stands", type(window.footer.text) == "string"
+	and (window.footer.text:find("À jour") ~= nil or window.footer.text:find("Synchronisation") ~= nil), window.footer.text)
 local UI = A.ns.UI
 check("the players tab is the home view", UI.State().tab == "players" and UI.State().period == "week")
 local function Rows(view)
