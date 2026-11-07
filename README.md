@@ -124,9 +124,11 @@ the kinds it knows.
   a gitignored `scripts\dev.local.ps1` setting `$WowAddOnsPaths`. A new addon
   needs a full game restart; updates only need `/reload`.
 - Package: `scripts\package-addon.ps1` writes `dist\KilledBySavages-<version>.zip`.
-  A GitHub release triggers `.github/workflows/publish-curseforge.yml` once
-  the CurseForge project id is set in it and the `CURSEFORGE_API_TOKEN`
-  secret exists.
+  Pushing a tag `vX.Y.Z` runs `.github/workflows/publish.yml`: it builds the
+  zip from the tag, creates the GitHub release with the zip (Wago Addons
+  imports it from there) and uploads it to CurseForge. A `0.x` version or a
+  `-beta` suffix is a beta, `-alpha` an alpha. `CURSEFORGE_API_TOKEN` is a
+  repository secret.
 
 ## The probe (KBSProbe)
 
