@@ -20,7 +20,7 @@ on:
           - alpha
 
 permissions:
-  contents: read
+  contents: write # the zip is attached to the release
 
 env:
   ADDON_NAME: KilledBySavages
@@ -80,6 +80,18 @@ jobs:
             "${ADDON_SOURCE}/" "dist/${ADDON_NAME}/"
           cd dist
           zip -r "${ADDON_NAME}-${{ steps.release.outputs.tag }}.zip" "${ADDON_NAME}"
+
+      - name: Attach the zip to the GitHub release
+        if: github.event_name == 'release'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The release page gets a download for players, and Wago Addons
+          # (release automation on the connected repository) imports it.
+          gh release upload "${{ steps.release.outputs.tag }}" \
+            "dist/${ADDON_NAME}-${{ steps.release.outputs.tag }}.zip" \
+            --clobber --repo "$GITHUB_REPOSITORY"
 
       - name: Prepare CurseForge metadata
         shell: bash
