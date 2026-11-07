@@ -24,3 +24,5 @@ Core\Util.lua
 Core\Db.lua
 Core\Identity.lua
 Core\Init.lua
+Core\Records.lua
+Core\Detect.lua
