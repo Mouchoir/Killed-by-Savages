@@ -118,6 +118,8 @@ end)
 local function Status()
 	local me = ns.Identity.me
 	ns.Print(L.STATUS_VERSION:format(ns.VERSION, tostring(me.name), tostring(me.realmName)))
+	local newer = ns.Sync and ns.Sync.NewerVersion()
+	if newer then ns.Print(L.UPDATE_AVAILABLE:format(newer)) end
 	if ns.Identity.InGuild() then
 		ns.Print(L.STATUS_GUILD:format(tostring(me.guild), tostring(me.rankName),
 			ns.Identity.IsOfficer() and L.STATUS_GUILD_OFFICER or ""))

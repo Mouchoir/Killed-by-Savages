@@ -1,6 +1,10 @@
 param(
     [string[]]$WowAddOnsPath,
-    [string[]]$Addon = @('KBSProbe')
+    [string[]]$Addon = @('KBSProbe'),
+    # Deploy Killed by Savages as published. Without it the deployed TOC says
+    # "X.Y.Z-dev": the guild is told of new versions, never of one that is not
+    # out yet. Run it once the release tag is pushed.
+    [switch]$Release
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,10 +80,18 @@ foreach ($name in $Addon) {
             throw "robocopy failed with exit code $code (target: $destination)"
         }
 
-        Write-Host "DEV deploy complete -> $destination"
+        $toc = Join-Path $destination "$name.toc"
+        if ($name -eq 'KilledBySavages' -and -not $Release) {
+            $text = [System.IO.File]::ReadAllText($toc)
+            $stamped = [regex]::Replace($text, '(?m)^(## Version: [0-9]+\.[0-9]+\.[0-9]+)(\r?)$', '${1}-dev${2}')
+            [System.IO.File]::WriteAllText($toc, $stamped, (New-Object System.Text.UTF8Encoding $false))
+        }
+        $version = [regex]::Match([System.IO.File]::ReadAllText($toc), '(?m)^## Version: (\S+)').Groups[1].Value
+
+        Write-Host "DEV deploy complete ($version) -> $destination"
         $deployed++
     }
 }
 
-Write-Host "Deployed $deployed time(s). A new addon needs a full game restart; updates only need /reload."
+Write-Host "Deployed $deployed time(s). A /reload in game loads it."
 exit 0

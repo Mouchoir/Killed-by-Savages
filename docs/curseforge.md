@@ -39,6 +39,9 @@ member and that enemy, the kills of the one named first against the
 other's. Nothing goes to your main chat. Close the tab and the feed turns
 off.
 
+**Updates.** When a guildmate runs a newer version of the addon, you are
+told once in the chat.
+
 **How it counts.** Kills are the honorable kills the server grants, so an
 assist counts like a killing blow, as in the game; the addon names the
 victim a few seconds later from the killing blow of you, your pet or your
@@ -54,7 +57,8 @@ sent.
 **What leaves your client.** Only hidden addon messages to your own guild,
 never chat text, never anything outside the game: your kill and death
 records, your battleground scoreboards and your profile (name, class, race,
-realm, level, the BattleTag hash, your display name). There is no server.
+realm, level, the BattleTag hash, your display name, the addon version).
+There is no server.
 
 **Commands.** `/kbs` opens the board, `/kbs status` says where the addon
 stands on this character, `/kbs options` opens the board on its Options
@@ -78,5 +82,6 @@ Options, au bout de la rangée d'onglets, règle le bouton de minicarte,
 l'échelle et le fil des kills. Désactivé par défaut, ce fil ouvre une fois
 coché un onglet de chat dédié où chaque kill et chaque mort de la guilde
 s'affiche avec le score entre le membre et l'ennemi, sans rien écrire dans
-le chat principal. Rien ne sort du jeu : les données circulent entre membres
-par messages d'addon cachés.
+le chat principal. Quand un membre de la guilde a une version plus récente
+de l'addon, un message dans le chat le signale. Rien ne sort du jeu : les
+données circulent entre membres par messages d'addon cachés.

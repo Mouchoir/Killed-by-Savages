@@ -1563,6 +1563,128 @@ end)())
 for index = 4, 10 do A.env.FCF_Close(A.env["ChatFrame" .. index]) end
 
 --------------------------------------------------------------------------------
+section("Newer versions")
+--------------------------------------------------------------------------------
+
+-- Hellos and profiles state the version. A member is told of a newer release
+-- once per session, one who logs in on an older version is answered by one
+-- who runs the newer, and a dev build is never announced. Every other client
+-- here runs "0.1.0-test", which answers nothing. In a function of its own:
+-- the main chunk is near Lua's limit of locals.
+local function NewerVersions()
+	local function Told(client, from, version)
+		local needle = client.ns.L.UPDATE_AVAILABLE:format(version)
+		local n = 0
+		for index = from + 1, #client.chat do
+			if client.chat[index]:find(needle, 1, true) then n = n + 1 end
+		end
+		return n
+	end
+	local function SentBy(from, client, kind)
+		local n = 0
+		for index = from + 1, #network.sent do
+			local sent = network.sent[index]
+			if sent.from == client.name and sent.channel == "GUILD" and sent.text:sub(1, 1) == kind then n = n + 1 end
+		end
+		return n
+	end
+	-- A new session on a version. The login hello goes out again only 10 min
+	-- after the last one: the wait is lifted here.
+	local function Session(client, version, between)
+		if client.online then client.logout() end
+		client.version = version
+		local own = client.saved and client.saved.characters and client.saved.characters[client.guid]
+		if own then own.lastHello = 0 end
+		if between then between() end
+		client.login()
+		advance(130)
+	end
+	-- The copy of a guildmate's profile a client holds, made older.
+	local function OlderCopy(client, of)
+		local entry = client.saved.authors[of.guid]
+		if entry and entry.profile then entry.profile.version = "0.1.15" end
+	end
+
+	Session(B, "0.1.15")
+	Session(C, "0.1.15")
+	local chatB, chatC = #B.chat, #C.chat
+	Session(A, "0.1.16")
+	check("a hello from a newer release tells the member once, in the chat", Told(B, chatB, "0.1.16") == 1
+		and Told(C, chatC, "0.1.16") == 1, Told(B, chatB, "0.1.16"))
+	A.ns.Sync.SendHello("recovery")
+	advance(10)
+	check("the same version again says nothing more this session", Told(B, chatB, "0.1.16") == 1)
+
+	-- B logs in again on 0.1.15. Its copy of A's profile is made older, so
+	-- only A's answer can tell it.
+	chatB = #B.chat
+	local netMark = #network.sent
+	Session(B, "0.1.15", function() OlderCopy(B, A) end)
+	check("a member who logs in on an older version gets one answer, from the member on the newer one",
+		SentBy(netMark, A, "V") == 1 and SentSince(netMark, "GUILD", "V") == 1, SentSince(netMark, "GUILD", "V"))
+	check("and is told once", Told(B, chatB, "0.1.16") == 1)
+
+	-- Two members on the newer version: one answer only.
+	Session(C, "0.1.16")
+	chatB, netMark = #B.chat, #network.sent
+	local quiet = A.counter("sync.versionAnswerSuppressed") + C.counter("sync.versionAnswerSuppressed")
+		+ A.counter("sync.skipped.V") + C.counter("sync.skipped.V")
+	Session(B, "0.1.15", function() OlderCopy(B, A) OlderCopy(B, C) end)
+	check("with two members on the newer version, one answers", SentSince(netMark, "GUILD", "V") == 1
+		and A.counter("sync.versionAnswerSuppressed") + C.counter("sync.versionAnswerSuppressed")
+		+ A.counter("sync.skipped.V") + C.counter("sync.skipped.V") == quiet + 1, SentSince(netMark, "GUILD", "V"))
+	check("and the member is told once", Told(B, chatB, "0.1.16") == 1)
+
+	-- Nobody on the newer version online: the profiles held tell it at login.
+	A.ns.Sync.SendHello("recovery")
+	advance(10)
+	A.logout()
+	C.logout()
+	chatB, netMark = #B.chat, #network.sent
+	Session(B, "0.1.15")
+	check("alone among older versions, the profiles held tell it at login", Told(B, chatB, "0.1.16") == 1
+		and SentSince(netMark, "GUILD", "V") == 0)
+
+	-- A dev build: never announced, and it answers nobody.
+	chatB = #B.chat
+	Session(A, "0.1.17-dev")
+	check("a dev build is never announced", Told(B, chatB, "0.1.17-dev") == 0 and Told(B, chatB, "0.1.17") == 0)
+	chatB, netMark = #B.chat, #network.sent
+	Session(B, "0.1.15")
+	check("and answers nobody", SentBy(netMark, A, "V") == 0 and Told(B, chatB, "0.1.17") == 0)
+
+	-- A dev build hears of a newer release like anyone, and a newer one
+	-- still in the same session is told too.
+	local chatA = #A.chat
+	Session(C, "0.1.18")
+	check("a dev build hears of a newer release", Told(A, chatA, "0.1.18") == 1)
+	check("so does an older one", Told(B, chatB, "0.1.18") == 1)
+	chatA = #A.chat
+	Session(A, "0.1.19")
+	check("a newer one again in the same session is told too", Told(B, chatB, "0.1.19") == 1 and Told(B, chatB, "0.1.18") == 1)
+	check("the member on the newest version is never told", not ChatSince(A, chatA, A.ns.L.UPDATE_AVAILABLE:match("^(.-)%(")))
+
+	-- Only plain digits: the field goes to the chat.
+	local bad = B.counter("sync.versionBad")
+	chatB = #B.chat
+	C.ns.Sync.SendRaw("V^0.2.0|cffff0000 now", "GUILD")
+	C.ns.Sync.SendRaw("V^0.2.0.1", "GUILD")
+	advance(2)
+	check("a version that is not plain digits is ignored", not ChatSince(B, chatB, "0.2.0") and B.counter("sync.versionBad") == bad + 2)
+
+	-- A version from before 0.1.15 cannot tell its player: no answer.
+	netMark = #network.sent
+	Session(B, "0.1.14")
+	check("no answer to a version too old to tell its player", SentSince(netMark, "GUILD", "V") == 0)
+
+	-- /kbs status says it again.
+	chatB = #B.chat
+	B.slash("status")
+	check("/kbs status names the newer version", Told(B, chatB, "0.1.19") == 1)
+end
+NewerVersions()
+
+--------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")
 --------------------------------------------------------------------------------
 

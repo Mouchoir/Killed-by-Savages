@@ -40,6 +40,7 @@ local L = {
 	SYNC_IDLE = "Up to date: %d journal(s) held, %d member(s) online with the addon.",
 	SYNC_ALONE = "No other member online with the addon: their journals come when one logs in.",
 	SYNC_FIRST_PAGES = "First guild journals received. /kbs opens the board.",
+	UPDATE_AVAILABLE = "A new version (%s) is available. Please update!",
 	STATUS_WINDOW_SOON = "The kill board window is not in this version yet.",
 	DEBUG_HEADER = "Killed by Savages %s, debug",
 
@@ -174,6 +175,7 @@ local translations = {
 		SYNC_IDLE = "À jour : %d journal(aux) tenu(s), %d membre(s) en ligne avec l'addon.",
 		SYNC_ALONE = "Aucun autre membre en ligne avec l'addon : leurs journaux arriveront quand l'un d'eux se connectera.",
 		SYNC_FIRST_PAGES = "Premiers journaux de guilde reçus. /kbs ouvre le tableau.",
+		UPDATE_AVAILABLE = "Une nouvelle version (%s) est disponible. Mettez à jour !",
 		STATUS_WINDOW_SOON = "La fenêtre du tableau de chasse n'est pas encore dans cette version.",
 
 		IMPORT_DONE = "%d enregistrements repris de la sonde : %d kills, %d morts, %d matchs de champ de bataille.",

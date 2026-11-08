@@ -11,6 +11,7 @@ local _, ns = ...
 --            I  inventory: the head and count I hold for every author, once per login
 --            A  advance: the authors where I am ahead of a hello or inventory I just saw
 --            R  a record of mine, live
+--            V  my version, answering a hello from an older one
 --   WHISPER  Q  a request for one page (200 seqs) of an author's journal
 --            B  a page, deflated, in chunks
 --
@@ -187,6 +188,12 @@ local function Pump()
 		Util.After(0.1, "pump", Pump)
 		return
 	end
+	if item.skip and item.skip() then
+		table.remove(queue, 1)
+		ns.Count("sync.skipped." .. item.kind)
+		Util.After(0.1, "pump", Pump)
+		return
+	end
 	if item.channel == "WHISPER" and not MemberAround(Identity.Canon(item.target)) then
 		table.remove(queue, 1)
 		if item.onDrop then item.onDrop() end
@@ -353,6 +360,104 @@ local function ScheduleAdvance(entries)
 			ns.Count("sync.advance", SendList("A", list))
 		end
 	end)
+end
+
+--------------------------------------------------------------------------------
+-- Newer versions
+--------------------------------------------------------------------------------
+
+-- Hellos and profiles state the sender's version. A member who meets a newer
+-- release than its own is told in the chat, once per session and version. A
+-- hello from an older version gets ours back (V) after a random pause, unless
+-- someone states as new a version first: a member who logs in after everyone
+-- who updated still hears of it. At login the profiles held tell it too,
+-- when nobody newer is around. Only plain releases are announced:
+-- scripts\dev.ps1 deploys "X.Y.Z-dev", which never is.
+local VERSION_ANSWER_MIN, VERSION_ANSWER_MAX = 2, 12
+local VERSION_SCAN_DELAY = 10            -- after login, before the profiles held are read
+local VERSION_TELLS_SINCE = { 0, 1, 15 } -- the first version that tells its player
+
+local versionTold                        -- the newest version the chat was told of, this session
+local versionAnswerAt                    -- when we chose to answer, while the answer waits
+local versionStatedAt = -math.huge       -- when someone last said to the guild a release as new as ours
+
+-- The numbers of a version. Strict, it takes a plain release only: the text
+-- goes to the chat, so a dev build or anything forged is left out.
+local function Numbers(version, strict)
+	if type(version) ~= "string" or #version > 20 then return nil end
+	local major, minor, patch = version:match(strict and "^(%d+)%.(%d+)%.(%d+)$" or "^(%d+)%.(%d+)%.(%d+)")
+	if not major then return nil end
+	return { tonumber(major), tonumber(minor), tonumber(patch) }
+end
+
+local function Newer(a, b)
+	for index = 1, 3 do
+		if a[index] ~= b[index] then return a[index] > b[index] end
+	end
+	return false
+end
+
+-- Our own numbers, a dev build's included; nothing when the client could
+-- not say (Init falls back to 0.0.0).
+local function OwnNumbers()
+	local own = Numbers(ns.VERSION)
+	if not own or (own[1] == 0 and own[2] == 0 and own[3] == 0) then return nil end
+	return own
+end
+
+-- Someone runs this version. Public: it was said on the guild channel, so
+-- every member online heard it too. False when it is no plain release.
+local function Heard(version, public)
+	local theirs, own = Numbers(version, true), OwnNumbers()
+	if not theirs then return false end
+	if not own then return true end
+	if public and not Newer(own, theirs) then versionStatedAt = Util.Clock() end
+	local told = Numbers(versionTold, true)
+	if Newer(theirs, own) and not (told and not Newer(theirs, told)) then
+		versionTold = version
+		ns.Count("sync.versionTold")
+		ns.Print(L.UPDATE_AVAILABLE:format(version))
+	end
+	return true
+end
+
+-- A hello from a member whose version is older than ours and tells its
+-- player: our version, after a pause, unless someone says one as new
+-- first. One answer covers every hello that came in meanwhile. A dev build
+-- answers nothing: its version is not out.
+local function AnswerVersion(theirs)
+	local own = Numbers(ns.VERSION, true)
+	if not theirs or not own or versionAnswerAt then return end
+	if not Newer(own, theirs) or Newer(VERSION_TELLS_SINCE, theirs) then return end
+	local chosenAt = Util.Clock()
+	versionAnswerAt = chosenAt
+	local function Said() return versionStatedAt >= chosenAt end
+	Util.After(Jitter(VERSION_ANSWER_MIN, VERSION_ANSWER_MAX), "version-answer", function()
+		versionAnswerAt = nil
+		if Said() then
+			ns.Count("sync.versionAnswerSuppressed")
+			return
+		end
+		Enqueue({ kind = "V", text = "V^" .. ns.VERSION, channel = "GUILD", priority = 2, skip = Said })
+		ns.Count("sync.versionAnswer")
+	end)
+end
+
+-- At login, the newest release among the profiles held: a member who
+-- updated may be offline now.
+local function ScanProfiles()
+	local best, bestNumbers
+	for _, author in pairs(ns.db.authors) do
+		local version = not author.own and author.profile and author.profile.version
+		local numbers = Numbers(version, true)
+		if numbers and (not bestNumbers or Newer(numbers, bestNumbers)) then best, bestNumbers = version, numbers end
+	end
+	if best then Heard(best, false) end
+end
+
+-- The newer version the player was told of, for /kbs status.
+function Sync.NewerVersion()
+	return versionTold
 end
 
 --------------------------------------------------------------------------------
@@ -722,6 +827,7 @@ local function StorePage(sender, tail, page, text)
 	if profile and (not author.profile or fromAuthor) then
 		author.profile = profile
 		author.profileVerified = fromAuthor or nil
+		Heard(profile.version, false)
 	end
 	ns.Count("sync.pageStored")
 	pagesIn, lastPageAt = pagesIn + 1, Now()
@@ -877,6 +983,8 @@ local function OnHello(sender, fields)
 	end
 	local canon = Identity.Canon(sender)
 	peers[canon] = { tail = tail, head = head, lifeHK = lifeHK, playerKey = fields[7], version = fields[3], at = Now(), name = sender }
+	Heard(fields[3], true)
+	AnswerVersion(Numbers(fields[3]))
 	-- A hello with no inventory behind it is a member who holds nothing yet:
 	-- tell them everything we hold, unless their inventory shows up (and
 	-- then says what they lack).
@@ -913,6 +1021,7 @@ local function OnProfile(sender, tail, text, channel)
 		ns.Count("sync.profileNotAuthor")
 		return
 	end
+	Heard(profile.version, channel == "GUILD")
 	ns.Fire("ProfileChanged", GuidOf(tail))
 end
 
@@ -991,6 +1100,11 @@ local function OnAddonMessage(prefix, text, channel, sender)
 	elseif kind == "R" then
 		local tail, seq, body = text:match("^R%^([%d%-%x]+)%^(%d+)%^(.*)$")
 		if tail then OnRecord(sender, tail, tonumber(seq), body) end
+	elseif kind == "V" then
+		local version = text:match("^V%^(.+)$")
+		if version and Identity.Member(sender) and not Heard(version, channel == "GUILD") then
+			ns.Count("sync.versionBad")
+		end
 	elseif kind == "Q" then
 		local tail, page = text:match("^Q%^([%d%-%x]+)%^(%d+)$")
 		if tail then OnRequest(sender, tail, tonumber(page)) end
@@ -1152,6 +1266,7 @@ local function OnLogin()
 		if OwnHead() ~= lastHeadAnnounced then Sync.SendHello("period") end
 	end)
 	Util.Every(10, "sync-timeouts", CheckTimeouts)
+	Util.After(VERSION_SCAN_DELAY, "version-scan", ScanProfiles)
 end
 
 -- A new display name goes out as a new profile.

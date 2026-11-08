@@ -73,6 +73,13 @@ held and how many members with the addon are around. `/kbs status` prints
 the same line. A member who held nothing of the guild is told once in chat
 when the first journals arrive.
 
+A member who runs an older version than a guildmate is told once per
+session in the chat: "A new version (0.1.16) is available. Please update!".
+Hellos and profiles carry the version; a member who logs in with an older
+one gets the newer one back from a member who runs it, and the profiles it
+holds tell it at login when nobody newer is online. Builds deployed by
+`scripts\dev.ps1` say `X.Y.Z-dev` and are never announced.
+
 ## Import from the probe
 
 A character that ran the probe (below) before installing the addon does not
@@ -130,8 +137,10 @@ the kinds it knows.
   probe's SavedVariables.
 - Deploy to the game: `scripts\dev.ps1 -Addon KilledBySavages` (or `dev.cmd`).
   Targets come from `-WowAddOnsPath`, the `KBS_WOW_ADDONS_PATH` variable, or
-  a gitignored `scripts\dev.local.ps1` setting `$WowAddOnsPaths`. A new addon
-  needs a full game restart; updates only need `/reload`.
+  a gitignored `scripts\dev.local.ps1` setting `$WowAddOnsPaths`. The deployed
+  TOC says `X.Y.Z-dev`, so the guild is never told of a version that is not
+  out; once the release tag is pushed, `-Release` deploys the build as
+  published. A `/reload` in game loads it.
 - Package: `scripts\package-addon.ps1` writes `dist\KilledBySavages-<version>.zip`.
   Pushing a tag `vX.Y.Z` runs `.github/workflows/publish.yml`: it builds the
   zip from the tag, creates the GitHub release with the zip (Wago Addons

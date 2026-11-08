@@ -574,7 +574,7 @@ function Mock.NewClient(spec)
 		env.GetServerTime = function() return math.floor(server) end
 		env.GetBuildInfo = function() return "1.60.1", "70790", "Nov 4 2026", 16001 end
 		env.GetLocale = function() return st.locale end
-		env.C_AddOns = { GetAddOnMetadata = function(_, field) if field == "Version" then return "0.1.0-test" end end }
+		env.C_AddOns = { GetAddOnMetadata = function(_, field) if field == "Version" then return client.version or "0.1.0-test" end end }
 		env.C_CVar = { GetCVar = function() return "0" end, GetCVarBool = function() return false end }
 		env.GetCVar = env.C_CVar.GetCVar
 		env.InCombatLockdown = function() return st.combat == true end
