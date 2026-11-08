@@ -23,7 +23,8 @@ it was written (see `probe/`):
   player who died next to you at that moment (`UNIT_DIED`). Killing blows and
   assists are shown apart.
 - **Deaths** come from the death recap, which names the killer (player or pet)
-  and the spell. Deaths to creatures are not recorded.
+  and the spell. Deaths to creatures are not recorded. The client fires
+  PLAYER_DEAD twice at times: within a few seconds it is one death.
 - **Battlegrounds**: enemies are secret inside, so each HK is recorded live
   with its time and subzone only. When the match ends the scoreboard becomes
   readable and is kept as a match record: your row, and the row of every
@@ -56,8 +57,13 @@ and the chain, and are dropped if the author's own count contradicts them.
 | `/kbs import` | Take the probe's records into this character's journal (see below) |
 | `/kbs debug` | Errors and sync state, for bug reports |
 
-Options: minimap button, chat announcements of guild kills, window scale. The
-display name of a player is set in the Me tab.
+Options, in the board's Options tab (at the right end of the tab row; the
+game's Settings page for the addon opens it too): minimap button, chat
+announcements of guild kills, a kill feed in a chat tab of its own named
+"Kills" where every kill and death of the guild reads "X killed Y (2-1)",
+the score being the kills of the one named first on the other against the
+other's on them, and the window scale. The display name of a player is set
+in the Me tab.
 
 The window's footer says where the sync with the guild stands: the seconds
 before the login announcement, the pages coming in, or how many journals are

@@ -30,6 +30,7 @@ Theme.COLORS = {
 	buttonBg = { 0.12, 0.115, 0.105, 0.98 },
 	buttonBorder = { 0.48, 0.40, 0.27, 1 },
 	selected = { 0.75, 0.55, 0.1 },
+	patina = { 0.52, 0.80, 0.70 },     -- verdigris on the bronze: what is not a board
 	rock = { 0.1, 0.09, 0.08, 1 },
 	horde = { 0.749, 0.29, 0.29 },
 	alliance = { 0.29, 0.478, 0.749 },
@@ -152,13 +153,24 @@ function Theme.DarkButton(parent, text, width, height)
 	Theme.Highlight(button)
 	function button:SetSelected(selected)
 		self.selected = selected
+		local r, g, b = Color("lit")
+		local textR, textG, textB = 1, 0.82, 0.27
+		if self.accent then
+			r, g, b = self.accent[1], self.accent[2], self.accent[3]
+			textR, textG, textB = r, g, b
+		end
 		if selected then
-			self:SetBackdropBorderColor(Color("lit"))
+			self:SetBackdropBorderColor(r, g, b)
 			self.label:SetTextColor(1, 1, 1)
 		else
 			self:SetBackdropBorderColor(unpack(Theme.COLORS.buttonBorder))
-			self.label:SetTextColor(1, 0.82, 0.27)
+			self.label:SetTextColor(textR, textG, textB)
 		end
+	end
+	-- A colour of its own, for a button that is not one of a kind.
+	function button:SetAccent(color)
+		self.accent = color
+		self:SetSelected(self.selected)
 	end
 	function button:SetLabel(value)
 		self.label:SetText(value)

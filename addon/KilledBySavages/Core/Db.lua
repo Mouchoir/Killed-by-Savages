@@ -19,6 +19,7 @@ local ERROR_CAP = 50
 local DEFAULT_SETTINGS = {
 	minimap = { hide = false },
 	announce = true,
+	killfeed = false,
 	scale = 1,
 	window = {},
 	verbose = false,

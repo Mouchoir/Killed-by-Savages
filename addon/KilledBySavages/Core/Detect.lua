@@ -29,6 +29,7 @@ local MATCH_DELAY = 3         -- an HK is matched this long after it, once all i
 local RING_SECONDS = 90       -- how long kills and deaths seen are kept around
 local RECAP_DELAYS = { 0.5, 1, 1.5, 3, 4 }
 local JUMP_DELAY = 1          -- a counter jump at login waits this long for a recovery
+local DEATH_WINDOW = 3        -- a second PLAYER_DEAD this soon after one is the same death
 
 local recentKills = {}        -- PARTY_KILL on players, newest last
 local recentDeaths = {}       -- UNIT_DIED on players, newest last
@@ -36,6 +37,7 @@ local lastHK                  -- last readable lifetime count
 local inBattleground = false
 local bgEntry                 -- the match we are in: { lifeHK, at, name, instanceID, live, done }
 local started = false
+local lastDeathAt             -- when PLAYER_DEAD last fired
 local SCORE_DELAYS = { 1, 3, 6 }
 
 --------------------------------------------------------------------------------
@@ -396,10 +398,18 @@ end
 
 function Detect.OnPlayerDead()
 	if not started then return end
+	-- The client fires PLAYER_DEAD twice at times, within the same second:
+	-- one death, one record.
+	local now = Util.Now()
+	if lastDeathAt and now - lastDeathAt < DEATH_WINDOW then
+		ns.Count("detect.deathRepeated")
+		return
+	end
+	lastDeathAt = now
 	local bucket = Bucket()
 	if not bucket then return end
 	-- The recap is readable in battlegrounds too; the position is not.
-	local death = { t = Util.Now(), bucket = bucket, pos = Util.Position(), lifeHK = lastHK, sub = Get(GetSubZoneText) }
+	local death = { t = now, bucket = bucket, pos = Util.Position(), lifeHK = lastHK, sub = Get(GetSubZoneText) }
 	local attempt = 0
 	local function try()
 		attempt = attempt + 1

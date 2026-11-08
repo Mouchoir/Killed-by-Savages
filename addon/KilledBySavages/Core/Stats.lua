@@ -22,6 +22,7 @@ local WEEK = Util.WEEK
 local FALLBACK_ANCHOR = 1793764800     -- 2026-11-04 04:00 UTC, a weekly reset
 local DEDUPE_WINDOW = 5                -- seconds between two reports of one enemy death
 local DEDUPE_DISTANCE = 0.03           -- map units between two unnamed kills counted once
+local REPEAT_WINDOW = 3                -- seconds within which one killer's second death record is the same death
 local COMPACT_DELAY = 20
 
 Stats.MILESTONES = { 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000 }
@@ -93,10 +94,11 @@ end
 -- hunting board and the feed need.
 local function Aggregate(guid)
 	local author = ns.db.authors[guid]
-	local agg = { weeks = {}, kills = {}, deaths = {}, victims = {}, killers = {}, provisional = 0, records = 0, backfilled = 0 }
+	local agg = { weeks = {}, kills = {}, deaths = {}, victims = {}, killers = {}, provisional = 0, records = 0, backfilled = 0, repeated = 0 }
 	if not author then return agg end
 	local lifeKs = {}
 	local counters = {}
+	local lastDeath
 	Records.Each(guid, function(record, _, seq)
 		agg.records = agg.records + 1
 		local week = Stats.WeekIndex(record.t)
@@ -138,20 +140,27 @@ local function Aggregate(guid)
 				end
 			end
 		elseif record.type == "D" then
-			if record.bucket ~= "b" then Bump(weekly, record.bucket, "deaths") end
-			agg.deaths[#agg.deaths + 1] = { seq = seq, record = record, provisional = provisional }
 			local key = record.ktail or (record.kname and ("pet:" .. record.kname)) or nil
-			if key then
-				local killer = agg.killers[key]
-				if not killer then
-					killer = { key = key, tail = record.ktail, kind = record.kkind, count = 0 }
-					agg.killers[key] = killer
+			-- The client fires PLAYER_DEAD twice at times; a journal written
+			-- before 0.1.13 can hold the same death twice in a row. Once.
+			if lastDeath and key and key == lastDeath.key and record.t - lastDeath.t <= REPEAT_WINDOW then
+				agg.repeated = agg.repeated + 1
+			else
+				if record.bucket ~= "b" then Bump(weekly, record.bucket, "deaths") end
+				agg.deaths[#agg.deaths + 1] = { seq = seq, record = record, provisional = provisional }
+				if key then
+					local killer = agg.killers[key]
+					if not killer then
+						killer = { key = key, tail = record.ktail, kind = record.kkind, count = 0 }
+						agg.killers[key] = killer
+					end
+					killer.count = killer.count + 1
+					if not killer.lastAt or record.t >= killer.lastAt then
+						killer.lastAt = record.t
+						killer.name, killer.class, killer.race = record.kname, record.kclass, record.krace
+					end
 				end
-				killer.count = killer.count + 1
-				if not killer.lastAt or record.t >= killer.lastAt then
-					killer.lastAt = record.t
-					killer.name, killer.class, killer.race = record.kname, record.kclass, record.krace
-				end
+				lastDeath = { t = record.t, key = key }
 			end
 		elseif record.type == "X" then
 			counters[#counters + 1] = { week = week, bucket = record.bucket, from = record.fromHK, to = record.toHK }
@@ -203,8 +212,13 @@ local function MatchCredits()
 		local authorTail = Util.Tail(guid)
 		Records.Each(guid, function(record)
 			if record.type == "M" then
-				local key = Records.MatchKey(record)
-				local match = credits.matches[key]
+				local match
+				for _, known in ipairs(credits.matches) do
+					if Records.SameMatch(known, record) then
+						match = known
+						break
+					end
+				end
 				if not match then
 					-- A scoreboard outside any instance (instanceID 0) is a guild
 					-- raid in the world, written by hand: its lines credit world
@@ -213,7 +227,7 @@ local function MatchCredits()
 						t = record.t, week = Stats.WeekIndex(record.t), instanceID = record.instanceID,
 						world = record.instanceID == 0, lines = {},
 					}
-					credits.matches[key] = match
+					credits.matches[#credits.matches + 1] = match
 				end
 				if authorTail then
 					match.lines[authorTail] = { tail = authorTail, hk = record.hk or 0, kb = record.kb or 0, deaths = record.deaths or 0, own = true }

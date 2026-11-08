@@ -17,6 +17,8 @@ read_globals = {
 	"PanelTemplates_SelectTab", "PanelTemplates_DeselectTab", "PanelTemplates_SetNumTabs", "PanelTemplates_TabResize",
 	"Settings", "STANDARD_TEXT_FONT", "GameFontNormalHuge", "GameFontNormalLarge", "LOCALIZED_CLASS_NAMES_MALE",
 	"ChatFrame_AddMessageEventFilter", "ERR_CHAT_PLAYER_NOT_FOUND_S",
+	"FCF_OpenNewWindow", "GetChatWindowInfo", "NUM_CHAT_WINDOWS", "ChatFrame_RemoveAllMessageGroups",
+	"ChatFrame_RemoveAllChannels", "HideUIPanel", "SettingsPanel",
 
 	-- Where we are
 	"IsInInstance", "GetInstanceInfo", "GetRealZoneText", "GetSubZoneText", "C_Map", "C_PvP",

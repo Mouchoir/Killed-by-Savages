@@ -145,20 +145,31 @@ local function BuildShell()
 		x:SetText("x")
 	end
 
-	-- Tabs
+	-- Tabs: the boards from the left; a tab that sets the addon up sits at
+	-- the right end, in a colour of its own, so it never reads as a board.
 	frame.tabButtons = {}
-	local previous
+	local previous, previousRight
 	for _, key in ipairs(UI.tabOrder) do
 		local definition = UI.tabs[key]
 		local button = Theme.DarkButton(frame, definition.title, 104, 22)
-		if previous then
-			button:SetPoint("LEFT", previous, "RIGHT", 4, 0)
+		if definition.side == "right" then
+			if previousRight then
+				button:SetPoint("RIGHT", previousRight, "LEFT", -4, 0)
+			else
+				button:SetPoint("TOPRIGHT", -PAD, -(TITLE_BAR + 10))
+			end
+			previousRight = button
 		else
-			button:SetPoint("TOPLEFT", PAD, -(TITLE_BAR + 10))
+			if previous then
+				button:SetPoint("LEFT", previous, "RIGHT", 4, 0)
+			else
+				button:SetPoint("TOPLEFT", PAD, -(TITLE_BAR + 10))
+			end
+			previous = button
 		end
+		if definition.accent and Theme.COLORS[definition.accent] then button:SetAccent(Theme.COLORS[definition.accent]) end
 		button:SetScript("OnClick", function() UI.SelectTab(key) end)
 		frame.tabButtons[key] = button
-		previous = button
 	end
 	local rule = Theme.Rule(frame, 0.5)
 	rule:SetPoint("TOPLEFT", PAD, -(TITLE_BAR + 10 + 22 + 6))

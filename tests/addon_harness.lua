@@ -92,7 +92,9 @@ check("a match decodes with its scoreboard", match.type == "M" and match.bucket 
 	and match.instanceID == 489 and match.lifeHK == 523 and #match.lines == 2 and match.lines[1].name == "Edric Vale" and match.lines[1].hk == 25
 	and match.lines[2].tail == "1234-00000002")
 check("a match round-trips through its encoder", Records.Encode(match) == "M1;9;1794010000;489;900;1;21;3;2;450;12000;300;523;21;1459;1234-00000005:Edric Vale:4:25:1:300,1234-00000002:Brenna Ironvale:1:9:3:80", Records.Encode(match))
-check("the same match has one key for every member", Records.MatchKey(match) == Records.MatchKey(Records.Decode("M1;2;1794010030;489;;;5;0;1;;;;10;0;;")))
+check("the same match is recognised from every member's record", Records.SameMatch(match, Records.Decode("M1;2;1794010030;489;;;5;0;1;;;;10;0;;")) == true
+	and Records.SameMatch(match, Records.Decode("M1;2;1794010030;529;;;5;0;1;;;;10;0;;")) == false
+	and Records.SameMatch(match, Records.Decode("M1;2;1794010200;489;;;5;0;1;;;;10;0;;")) == false)
 check("live HKs of a match do not count twice in the chain", Records.Gain(match) == 0 and Records.Gain(Records.Decode("M1;2;1794010030;489;;;5;0;1;;;;10;2;;")) == 3)
 local counter = Records.Decode("X1;10;1794010100;u;19;24")
 check("a counter record decodes", counter.type == "X" and counter.fromHK == 19 and counter.toHK == 24)
@@ -306,6 +308,41 @@ A.fire("PLAYER_DEAD")
 advance(12)
 check("no recap is counted, not recorded", #Journal(A) == before and A.counter("detect.deathNoRecap") == 1)
 
+-- The client fires PLAYER_DEAD twice at times, within the same second: one
+-- death, one record.
+before = #Journal(A)
+A.state.recap = { { sourceName = "Gruk Bonecrusher", sourceGUID = HORDE[1].guid, sourceFlags = 0x548, spellName = "Frappe mortelle" } }
+A.state.recapReadyAt = Mock.Now()
+A.fire("PLAYER_DEAD")
+A.fire("PLAYER_DEAD")
+advance(6)
+check("a second PLAYER_DEAD in the same second is the same death", #Journal(A) == before + 1 and A.counter("detect.deathRepeated") == 1,
+	#Journal(A) - before)
+advance(10)
+A.fire("PLAYER_DEAD")
+advance(6)
+check("a death seconds later is a new one", #Journal(A) == before + 2 and A.counter("detect.deathRepeated") == 1)
+
+-- A journal written before that fix can hold the same death twice in a
+-- row: the stats count it once.
+-- In a guild of its own, so nothing of it reaches the others.
+local Thane = NewClient({ name = "Thane Ironward", guid = Guid(41), class = "WARRIOR", race = "Dwarf", guild = "Ironward Company", lifetime = 40, rank = 3 })
+Thane.login()
+advance(5)
+local twice = {
+	type = "D", t = Mock.Server(), bucket = "w", ktail = Thane.ns.Util.Tail(HORDE[1].guid), kname = "Gruk Bonecrusher", kclass = "WARRIOR",
+	krace = "Orc", kkind = "p", spell = "Frappe mortelle", mapID = 1424, x = 0.4, y = 0.5, lifeHK = 40,
+}
+for _ = 1, 2 do
+	local copy = {}
+	for key, value in pairs(twice) do copy[key] = value end
+	Thane.ns.Records.AppendOwn(copy)
+end
+local tStats = Thane.ns.Stats.Character(Thane.guid, "all", "w")
+check("the same death twice in a row counts once in the stats", #Journal(Thane) == 2 and tStats.deaths == 1
+	and Thane.ns.Stats.AuthorAggregate(Thane.guid).repeated == 1, tStats.deaths)
+check("and shows once in the feed", #Thane.ns.Stats.Feed(10, "w") == 1, #Thane.ns.Stats.Feed(10, "w"))
+
 --------------------------------------------------------------------------------
 section("Battlegrounds")
 --------------------------------------------------------------------------------
@@ -368,7 +405,9 @@ LeaveBG(A)
 advance(1)
 check("leaving a finished match records nothing more", #Journal(A) == before + 1)
 
--- A match whose scoreboard never came: the counter's delta is kept.
+-- A match whose scoreboard never came, in another battleground: the
+-- counter's delta is kept.
+A.state.instanceID, A.state.instanceName = 489, "Goulet des Chanteguerres"
 EnterBG(A)
 A.state.lifetime = A.state.lifetime + 2
 A.fire("PLAYER_PVP_KILLS_CHANGED", "player")
@@ -379,6 +418,7 @@ record = Last(A)
 check("without a scoreboard, leaving keeps the counter's delta", record.type == "M" and record.hk == 2 and record.live == 2 and #record.lines == 0
 	and A.counter("detect.bgMatchFallback") == 1, record and record.type)
 check("the chain still holds", Records.CheckChain(Journal(A)) == true)
+A.state.instanceID, A.state.instanceName = nil, nil
 
 -- A battleground that gave nothing records nothing.
 before = #Journal(A)
@@ -757,9 +797,11 @@ check("the hunting board names the most killed enemy", victims[1] and victims[1]
 check("with how many members killed it", victims[1].byCount >= 1 and victims[1].class == "MAGE")
 local mine = Stats.Victims("all", "all", { guid = A.guid })
 check("a character's own board is a subset", #mine <= #Stats.Victims("all", "all"))
+-- Gruk killed Aldric twice in the deaths section, then twice more around
+-- the doubled PLAYER_DEAD.
 local killers = Stats.Killers("all", "all", nil, 5)
-check("our killers are listed from the deaths, battlegrounds included", #killers == 3 and killers[1].count == 2
-	and killers[1].name == "Gruk Bonecrusher", #killers)
+check("our killers are listed from the deaths, battlegrounds included", #killers == 3 and killers[1].count == 4
+	and killers[1].name == "Gruk Bonecrusher", #killers .. "/" .. tostring(killers[1] and killers[1].count))
 local feed = Stats.Feed(10, "all")
 check("the feed is newest first with the author's name", feed[1] and feed[1].t >= feed[2].t and feed[1].info and feed[1].info.name ~= nil)
 local milestone = Stats.Milestone()
@@ -1296,10 +1338,11 @@ local playersTab = window.tabFrames.players
 check("the players list has one row per player", #Rows(playersTab.view) == #Stats.Players("week", "all") and #Rows(playersTab.view) >= 1,
 	#Rows(playersTab.view))
 check("the first row carries the first player's numbers", Rows(playersTab.view)[1].row.data.rank == 1 and Rows(playersTab.view)[1].row.cells[2].text.text == Stats.Players("week", "all")[1].name)
-for _, key in ipairs({ "characters", "guild", "hunt", "me" }) do
+for _, key in ipairs({ "characters", "guild", "hunt", "me", "options" }) do
 	UI.SelectTab(key)
 	check("the " .. key .. " tab builds and fills", window.tabFrames[key] ~= nil and window.tabFrames[key].shown == true)
 end
+check("the options tab reads the settings", window.tabFrames.options.boxes[2].checked == true and window.tabFrames.options.boxes[3].checked == false)
 check("the guild feed shows the latest events", #Rows(window.tabFrames.guild.view) > 0 and Rows(window.tabFrames.guild.view)[1].row.data.event ~= nil)
 check("a character's kills from before the addon travel with its profile", (function()
 	for _, row in ipairs(Stats.Characters("all", "all")) do
@@ -1308,6 +1351,7 @@ check("a character's kills from before the addon travel with its profile", (func
 	return false
 end)())
 check("the hunt boards fill", #Rows(window.tabFrames.hunt.victims) > 0 and #Rows(window.tabFrames.hunt.killers) > 0)
+UI.SelectTab("me")
 check("the me tab lists my characters and shows my alias", #Rows(window.tabFrames.me.view) == 1 and window.tabFrames.me.box.text == "Aldric the Bold")
 UI.SetPeriod("last")
 check("a period without data shows the empty state", window.tabFrames.me.view.empty.shown == true)
@@ -1330,7 +1374,74 @@ advance(5)
 check("the window remembers its tab and filters", A.db().settings.tab == "players" and A.db().settings.period == "all" and A.db().settings.bucket == "all")
 check("the minimap button registered", A.ns.MinimapButton.registered == true)
 A.slash("options")
-check("options fall back gracefully without the Settings API", A.said("not available") or A.said("pas disponible"))
+check("/kbs options opens the board on its options tab", A.env.KilledBySavagesFrame.shown == true and A.ns.UI.State().tab == "options"
+	and A.env.KilledBySavagesFrame.tabFrames.options ~= nil and A.env.KilledBySavagesFrame.tabFrames.options.shown == true)
+A.slash("")
+
+--------------------------------------------------------------------------------
+section("Kill feed")
+--------------------------------------------------------------------------------
+
+-- With the option on, the tab opens at login and every kill or death of
+-- the guild lands there with the score between the two. Records are
+-- appended straight here, so each line is exact.
+local function FeedWindow(client)
+	for _, w in pairs(client.windows) do
+		if w.name == client.ns.L.KILLFEED_TAB then return w end
+	end
+	return nil
+end
+check("without the option, no chat tab is opened", FeedWindow(A) == nil)
+A.db().settings.killfeed = true
+A.logout()
+A.login()
+advance(5)
+local feedTab = FeedWindow(A)
+check("the kill feed opens a chat tab of its own at login", feedTab ~= nil and #feedTab.lines == 1 and feedTab.lines[1] == A.ns.L.KILLFEED_ON,
+	feedTab and #feedTab.lines)
+
+-- A named kill of mine: the line carries both names and my score on the enemy.
+local zaljin = A.ns.Util.Tail(HORDE[2].guid)
+before = #feedTab.lines
+A.state.lifetime = A.state.lifetime + 1
+A.ns.Records.AppendOwn({ type = "K", t = Mock.Server(), bucket = "w", how = "kb", vtail = zaljin, vname = "Zaljin Darkspear",
+	vclass = "SHAMAN", vrace = "Troll", mapID = 1424, x = 0.4, y = 0.5, lifeHK = A.state.lifetime })
+advance(1)
+local feedAgg = A.ns.Stats.AuthorAggregate(A.guid)
+local killScore = ("(%d-%d)"):format(feedAgg.victims[zaljin] and feedAgg.victims[zaljin].count or 0, feedAgg.killers[zaljin] and feedAgg.killers[zaljin].count or 0)
+local feedLine = feedTab.lines[#feedTab.lines] or ""
+check("a kill lands in the tab with the score between the two", #feedTab.lines == before + 1 and feedLine:find("Aldric Stormhand", 1, true) ~= nil
+	and feedLine:find("Zaljin Darkspear", 1, true) ~= nil and feedLine:find(killScore, 1, true) ~= nil, feedLine)
+
+-- A death of mine: the killer comes first, with its score on me.
+before = #feedTab.lines
+local gruk = A.ns.Util.Tail(HORDE[1].guid)
+A.ns.Records.AppendOwn({ type = "D", t = Mock.Server(), bucket = "w", ktail = gruk, kname = "Gruk Bonecrusher", kclass = "WARRIOR",
+	krace = "Orc", kkind = "p", spell = "Frappe mortelle", mapID = 1424, x = 0.4, y = 0.5, lifeHK = A.state.lifetime })
+advance(1)
+feedAgg = A.ns.Stats.AuthorAggregate(A.guid)
+local deathScore = ("(%d-%d)"):format(feedAgg.killers[gruk] and feedAgg.killers[gruk].count or 0, feedAgg.victims[gruk] and feedAgg.victims[gruk].count or 0)
+feedLine = feedTab.lines[#feedTab.lines] or ""
+check("a death lands there too, the killer first with its score on me", #feedTab.lines == before + 1
+	and feedLine:find("Gruk Bonecrusher", 1, true) ~= nil and feedLine:find("Aldric Stormhand", 1, true) ~= nil
+	and feedLine:find(deathScore, 1, true) ~= nil
+	and feedLine:find("Gruk Bonecrusher", 1, true) < feedLine:find("Aldric Stormhand", 1, true), feedLine)
+
+-- A battleground HK names nobody: its match is on the board, not the feed.
+before = #feedTab.lines
+A.state.lifetime = A.state.lifetime + 1
+A.ns.Records.AppendOwn({ type = "K", t = Mock.Server(), bucket = "b", how = "bg", sub = "Pic de Dun Baldar", lifeHK = A.state.lifetime })
+advance(1)
+check("a battleground HK is not a feed line", #feedTab.lines == before)
+
+-- Off: nothing more reaches the tab.
+A.db().settings.killfeed = false
+before = #feedTab.lines
+A.state.lifetime = A.state.lifetime + 1
+A.ns.Records.AppendOwn({ type = "K", t = Mock.Server(), bucket = "w", how = "kb", vtail = zaljin, vname = "Zaljin Darkspear",
+	vclass = "SHAMAN", vrace = "Troll", mapID = 1424, lifeHK = A.state.lifetime })
+advance(1)
+check("the option off, the tab gets nothing more", #feedTab.lines == before)
 
 --------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")
@@ -1345,7 +1456,7 @@ for _, client in ipairs(Mock.clients) do
 		check(client.name .. ": SavedVariables clean", okSave, message)
 	end
 end
-check("the saved data stays small", #Serialize(A.db()) < 20000, #Serialize(A.db()))
+check("the saved data stays small", #Serialize(A.db()) < 22000, #Serialize(A.db()))
 check("records are stored as strings, not tables", (function()
 	for _, entry in pairs(A.db().authors[Guid(1)].log) do
 		if type(entry) ~= "string" then return false end

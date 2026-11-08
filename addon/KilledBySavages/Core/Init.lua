@@ -185,12 +185,11 @@ function ns.ToggleWindow()
 	end
 end
 
+-- The options are a tab of the board.
 function ns.OpenOptions()
-	if ns.Options and ns.Options.Open then
-		ns.Options.Open()
-	else
-		ns.Print(L.OPTIONS_SOON)
-	end
+	if type(HideUIPanel) == "function" and type(SettingsPanel) == "table" then pcall(HideUIPanel, SettingsPanel) end
+	ns.UI.Show()
+	ns.UI.SelectTab("options")
 end
 
 local function HandleSlash(input)

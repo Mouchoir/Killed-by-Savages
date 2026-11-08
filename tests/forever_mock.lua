@@ -345,7 +345,7 @@ Mock.NewFrame = NewFrame
 function Mock.NewClient(spec)
 	local addon = spec.addon or Mock.PROBE
 	local client = {
-		name = spec.name, guid = spec.guid, online = false, prefixes = {}, chat = {}, filters = {},
+		name = spec.name, guid = spec.guid, online = false, prefixes = {}, chat = {}, filters = {}, windows = {},
 		frames = {}, forbidden = {}, saved = spec.saved, generation = 0, addon = addon,
 	}
 	local first, surname = spec.name:match("^(%S+) (.+)$")
@@ -499,6 +499,35 @@ function Mock.NewClient(spec)
 			end,
 		}
 		env.DEFAULT_CHAT_FRAME = { AddMessage = function(_, text) client.chat[#client.chat + 1] = text end }
+		-- Chat windows: the general one, and up to nine more an addon may
+		-- open; they outlive a reload, as the game's do.
+		env.NUM_CHAT_WINDOWS = 10
+		env.ChatFrame1 = env.DEFAULT_CHAT_FRAME
+		for index, window in pairs(client.windows) do env["ChatFrame" .. index] = window.frame end
+		env.GetChatWindowInfo = function(index)
+			if index == 1 then return "General", 14, 1, 1, 1, 1, true, false, true, false end
+			local window = client.windows[index]
+			if not window then return "", 14, 1, 1, 1, 1, false, false, false, false end
+			return window.name, 14, 1, 1, 1, 1, true, false, true, false
+		end
+		env.FCF_OpenNewWindow = function(name)
+			for index = 2, env.NUM_CHAT_WINDOWS do
+				if not client.windows[index] then
+					local window = { name = name, lines = {} }
+					window.frame = {
+						GetID = function() return index end,
+						IsShown = function() return true end,
+						AddMessage = function(_, text) window.lines[#window.lines + 1] = text end,
+					}
+					client.windows[index] = window
+					env["ChatFrame" .. index] = window.frame
+					return window.frame, index
+				end
+			end
+			return nil
+		end
+		env.ChatFrame_RemoveAllMessageGroups = function() end
+		env.ChatFrame_RemoveAllChannels = function() end
 		-- Chat filters, as the game's chat frame runs them on system lines.
 		env.ChatFrame_AddMessageEventFilter = function(event, fn)
 			local list = client.filters[event] or {}
@@ -550,7 +579,7 @@ function Mock.NewClient(spec)
 			return false, "none"
 		end
 		env.GetInstanceInfo = function()
-			if st.bucket == "bg" then return "Vallée d'Alterac", "pvp", 0, "", 40, 0, false, 30, 40, nil end
+			if st.bucket == "bg" then return st.instanceName or "Vallée d'Alterac", "pvp", 0, "", 40, 0, false, st.instanceID or 30, 40, nil end
 			return "Royaumes de l'est", "none", 0, "", 0, 0, false, 0, 0, nil
 		end
 		env.GetRealZoneText = function() return st.zone end

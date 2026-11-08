@@ -259,10 +259,13 @@ function Records.Gain(r)
 	return 0
 end
 
--- A match is the same for every member who was in it: the instance and
--- the minute it ended.
-function Records.MatchKey(r)
-	return tostring(r.instanceID or "?") .. ":" .. tostring(math.floor((r.t or 0) / 120))
+-- Whether two match records describe the same battleground: the same
+-- instance, closed within two minutes of each other. Members write theirs
+-- within seconds; a fixed window would split a match closed across its edge.
+local MATCH_TOLERANCE = 120
+function Records.SameMatch(a, b)
+	if a.instanceID ~= b.instanceID then return false end
+	return math.abs((a.t or 0) - (b.t or 0)) <= MATCH_TOLERANCE
 end
 
 -- The lifetime count a record leaves behind.
