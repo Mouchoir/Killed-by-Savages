@@ -18,8 +18,7 @@ local ERROR_CAP = 50
 
 local DEFAULT_SETTINGS = {
 	minimap = { hide = false },
-	announce = true,
-	killfeed = false,
+	killfeed = false,                     -- kill lines in a chat tab of their own, off by default
 	scale = 1,
 	window = {},
 	verbose = false,
@@ -49,6 +48,9 @@ function Db.Init()
 	ns.db = db
 	db.schema = db.schema or SCHEMA
 	db.settings = Fill(db.settings or {}, DEFAULT_SETTINGS)
+	-- Up to 0.1.13 guild kills were also announced in the main chat, on by
+	-- default; since 0.1.14 the kill lines only go to the kill feed's tab.
+	db.settings.announce = nil
 	db.characters = db.characters or {}   -- own characters: [guid] = their state
 	db.authors = db.authors or {}         -- every journal held, own ones included
 	db.pending = db.pending or {}         -- HKs not matched yet (a /reload may interrupt)

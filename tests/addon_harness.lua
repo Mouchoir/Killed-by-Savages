@@ -1342,7 +1342,7 @@ for _, key in ipairs({ "characters", "guild", "hunt", "me", "options" }) do
 	UI.SelectTab(key)
 	check("the " .. key .. " tab builds and fills", window.tabFrames[key] ~= nil and window.tabFrames[key].shown == true)
 end
-check("the options tab reads the settings", window.tabFrames.options.boxes[2].checked == true and window.tabFrames.options.boxes[3].checked == false)
+check("the options tab reads the settings", window.tabFrames.options.boxes[1].checked == true and window.tabFrames.options.boxes[2].checked == false)
 check("the guild feed shows the latest events", #Rows(window.tabFrames.guild.view) > 0 and Rows(window.tabFrames.guild.view)[1].row.data.event ~= nil)
 check("a character's kills from before the addon travel with its profile", (function()
 	for _, row in ipairs(Stats.Characters("all", "all")) do
@@ -1382,36 +1382,87 @@ A.slash("")
 section("Kill feed")
 --------------------------------------------------------------------------------
 
--- With the option on, the tab opens at login and every kill or death of
--- the guild lands there with the score between the two. Records are
--- appended straight here, so each line is exact.
+-- Off by default: no tab, and no kill line in the main chat. On, every kill
+-- or death of the guild lands in a chat tab of its own with the score
+-- between the two, and still nothing in the main chat. Records are appended
+-- straight here, so each line is exact.
 local function FeedWindow(client)
 	for _, w in pairs(client.windows) do
-		if w.name == client.ns.L.KILLFEED_TAB then return w end
+		if w.name == client.ns.L.KILLFEED_TAB and (w.shown or w.docked) then return w end
 	end
 	return nil
 end
-check("without the option, no chat tab is opened", FeedWindow(A) == nil)
-A.db().settings.killfeed = true
-A.logout()
-A.login()
-advance(5)
+local function ChatSince(client, from, needle)
+	for index = from + 1, #client.chat do
+		if client.chat[index]:find(needle, 1, true) then return true end
+	end
+	return false
+end
+-- A new session. The kills here move the server's counter without the
+-- client's event, so a login sees a jump and holds new records while the
+-- guild is asked, up to 120 s: the wait covers it.
+local function Relog(client, between)
+	client.logout()
+	if between then between() end
+	client.login()
+	advance(130)
+end
+local zaljin = A.ns.Util.Tail(HORDE[2].guid)
+local function KillZaljin(client)
+	client.state.lifetime = client.state.lifetime + 1
+	client.ns.Records.AppendOwn({ type = "K", t = Mock.Server(), bucket = "w", how = "kb", vtail = zaljin, vname = "Zaljin Darkspear",
+		vclass = "SHAMAN", vrace = "Troll", mapID = 1424, x = 0.4, y = 0.5, lifeHK = client.state.lifetime })
+	advance(1)
+end
+-- A guildmate's kill as the sync hands it over when it arrives live.
+local function MateKill(client, mate)
+	client.ns.Fire("RecordStored", mate.guid, 1, { type = "K", seq = 1, t = Mock.Server(), bucket = "w", how = "kb",
+		vtail = zaljin, vname = "Zaljin Darkspear", vclass = "SHAMAN", vrace = "Troll", mapID = 1424 }, "")
+	advance(1)
+end
+local function FeedBox(client)
+	client.slash("options")
+	return client.env.KilledBySavagesFrame.tabFrames.options.boxes[2]
+end
+local function Tick(client, value)
+	local box = FeedBox(client)
+	box:SetChecked(value)
+	box:GetScript("OnClick")(box)
+	client.slash("")
+	advance(1)
+end
+
+-- The main chat announcement of 0.1.13 is gone, its setting dropped.
+A.db().settings.announce = true
+Relog(A)
+check("the kill feed is off by default, the old announcement setting dropped", A.db().settings.killfeed == false
+	and A.db().settings.announce == nil and FeedWindow(A) == nil)
+local chatMark = #A.chat
+KillZaljin(A)
+MateKill(A, B)
+check("off, neither my kills nor a guildmate's write anything in the chat", not ChatSince(A, chatMark, "Zaljin Darkspear") and FeedWindow(A) == nil)
+
+-- Ticked: the tab opens at once and is selected, so the player sees it.
+Tick(A, true)
 local feedTab = FeedWindow(A)
-check("the kill feed opens a chat tab of its own at login", feedTab ~= nil and #feedTab.lines == 1 and feedTab.lines[1] == A.ns.L.KILLFEED_ON,
-	feedTab and #feedTab.lines)
+check("ticked, the kill feed opens a chat tab of its own, selected", A.db().settings.killfeed == true and feedTab ~= nil
+	and #feedTab.lines == 1 and feedTab.lines[1] == A.ns.L.KILLFEED_ON and A.selected == feedTab.frame, feedTab and #feedTab.lines)
 
 -- A named kill of mine: the line carries both names and my score on the enemy.
-local zaljin = A.ns.Util.Tail(HORDE[2].guid)
 before = #feedTab.lines
-A.state.lifetime = A.state.lifetime + 1
-A.ns.Records.AppendOwn({ type = "K", t = Mock.Server(), bucket = "w", how = "kb", vtail = zaljin, vname = "Zaljin Darkspear",
-	vclass = "SHAMAN", vrace = "Troll", mapID = 1424, x = 0.4, y = 0.5, lifeHK = A.state.lifetime })
-advance(1)
+chatMark = #A.chat
+KillZaljin(A)
 local feedAgg = A.ns.Stats.AuthorAggregate(A.guid)
 local killScore = ("(%d-%d)"):format(feedAgg.victims[zaljin] and feedAgg.victims[zaljin].count or 0, feedAgg.killers[zaljin] and feedAgg.killers[zaljin].count or 0)
 local feedLine = feedTab.lines[#feedTab.lines] or ""
 check("a kill lands in the tab with the score between the two", #feedTab.lines == before + 1 and feedLine:find("Aldric Stormhand", 1, true) ~= nil
 	and feedLine:find("Zaljin Darkspear", 1, true) ~= nil and feedLine:find(killScore, 1, true) ~= nil, feedLine)
+before = #feedTab.lines
+MateKill(A, B)
+feedLine = feedTab.lines[#feedTab.lines] or ""
+check("a guildmate's kill lands there too", #feedTab.lines == before + 1 and feedLine:find("Brenna Ironvale", 1, true) ~= nil
+	and feedLine:find("Zaljin Darkspear", 1, true) ~= nil, feedLine)
+check("on, nothing goes to the main chat", not ChatSince(A, chatMark, "Zaljin Darkspear"))
 
 -- A death of mine: the killer comes first, with its score on me.
 before = #feedTab.lines
@@ -1434,14 +1485,82 @@ A.ns.Records.AppendOwn({ type = "K", t = Mock.Server(), bucket = "b", how = "bg"
 advance(1)
 check("a battleground HK is not a feed line", #feedTab.lines == before)
 
--- Off: nothing more reaches the tab.
-A.db().settings.killfeed = false
+-- The tab outlives a login: found again, not opened twice, and the tab the
+-- player reads stays selected.
 before = #feedTab.lines
-A.state.lifetime = A.state.lifetime + 1
-A.ns.Records.AppendOwn({ type = "K", t = Mock.Server(), bucket = "w", how = "kb", vtail = zaljin, vname = "Zaljin Darkspear",
-	vclass = "SHAMAN", vrace = "Troll", mapID = 1424, lifeHK = A.state.lifetime })
-advance(1)
-check("the option off, the tab gets nothing more", #feedTab.lines == before)
+Relog(A)
+local feedCount = 0
+for _, w in pairs(A.windows) do
+	if w.name == A.ns.L.KILLFEED_TAB then feedCount = feedCount + 1 end
+end
+check("at the next login the tab is found again, not opened twice", FeedWindow(A) == feedTab and feedCount == 1
+	and #feedTab.lines == before and A.selected == A.env.DEFAULT_CHAT_FRAME)
+
+-- The option is account-wide, chat tabs belong to each character: one
+-- without the tab gets it at login, behind the tab the player reads.
+Relog(A, function() A.windows = {} end)
+feedTab = FeedWindow(A)
+check("a character without the tab gets it at login, not selected", feedTab ~= nil and feedTab.lines[1] == A.ns.L.KILLFEED_ON
+	and A.selected == A.env.DEFAULT_CHAT_FRAME)
+
+-- The player closes the tab: the feed turns off, said once in the main
+-- chat, and the next kill goes nowhere.
+A.env.FCF_Close(feedTab.frame)
+before = #feedTab.lines
+chatMark = #A.chat
+KillZaljin(A)
+check("closing the tab turns the feed off, said in the main chat", A.db().settings.killfeed == false
+	and ChatSince(A, chatMark, A.ns.L.KILLFEED_CLOSED) and not ChatSince(A, chatMark, "Zaljin Darkspear") and #feedTab.lines == before)
+
+-- Ticked again, the tab comes back; unticked, the tab it opened closes.
+Tick(A, true)
+feedTab = FeedWindow(A)
+check("ticked again, the tab comes back", A.db().settings.killfeed == true and feedTab ~= nil and feedTab.lines[1] == A.ns.L.KILLFEED_ON)
+Tick(A, false)
+chatMark = #A.chat
+KillZaljin(A)
+check("unticked, the tab closes and no line goes anywhere", A.db().settings.killfeed == false and FeedWindow(A) == nil
+	and A.db().characters[A.guid].feedTab == nil and not ChatSince(A, chatMark, "Zaljin Darkspear"))
+
+-- Closed with no line before the logout: the feed is off all the same.
+A.ns.Killfeed.Enable()
+A.env.FCF_Close(FeedWindow(A).frame)
+A.logout()
+check("a tab closed before the logout leaves the feed off", A.saved.settings.killfeed == false)
+A.login()
+advance(130)
+check("and no tab opens at the next login", FeedWindow(A) == nil)
+
+-- In combat the tab waits for the end of the fight, with the lines.
+A.state.combat = true
+chatMark = #A.chat
+A.ns.Killfeed.Enable()
+KillZaljin(A)
+check("ticked in combat, the tab waits for the fight to end", FeedWindow(A) == nil and ChatSince(A, chatMark, A.ns.L.KILLFEED_AFTER_COMBAT)
+	and not ChatSince(A, chatMark, "Zaljin Darkspear"))
+A.state.combat = false
+A.fire("PLAYER_REGEN_ENABLED")
+feedTab = FeedWindow(A)
+check("after the fight it opens with the lines that waited", feedTab ~= nil and #feedTab.lines == 2 and feedTab.lines[1] == A.ns.L.KILLFEED_ON
+	and feedTab.lines[2]:find("Zaljin Darkspear", 1, true) ~= nil, feedTab and #feedTab.lines)
+A.ns.Killfeed.Disable()
+
+-- No chat window to spare: the lines go to the main chat, said once.
+for index = 1, 7 do A.env.FCF_OpenNewWindow("Tab " .. index) end
+chatMark = #A.chat
+A.ns.Killfeed.Enable()
+KillZaljin(A)
+check("with every chat window in use, the lines go to the main chat", FeedWindow(A) == nil and ChatSince(A, chatMark, A.ns.L.KILLFEED_NO_TAB)
+	and ChatSince(A, chatMark, "Zaljin Darkspear"))
+A.ns.Killfeed.Disable()
+check("unticked, the player's own tabs stay as they were", (function()
+	for index = 4, 10 do
+		local w = A.windows[index]
+		if not (w and w.name == ("Tab " .. (index - 3)) and (w.shown or w.docked)) then return false end
+	end
+	return true
+end)())
+for index = 4, 10 do A.env.FCF_Close(A.env["ChatFrame" .. index]) end
 
 --------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")

@@ -4,7 +4,7 @@
 ## Notes: Guild kill board for World of Warcraft: Forever. Counts the enemies each member kills, by player (all characters together), by character and for the whole guild, in the world and in battlegrounds.
 ## Notes-frFR: Tableau de chasse de guilde pour World of Warcraft: Forever. Compte les ennemis tués par chaque membre, par joueur (tous personnages réunis), par personnage et pour toute la guilde, en monde ouvert et en champ de bataille.
 ## Author: Mouchoir
-## Version: 0.1.13
+## Version: 0.1.14
 ## X-Wago-ID: E6gz74N1
 ## X-License: GPL-3.0-or-later
 ## X-Website: https://github.com/Mouchoir/Killed-by-Savages

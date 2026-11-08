@@ -408,7 +408,7 @@ function UI.Frame()
 end
 
 --------------------------------------------------------------------------------
--- Live updates and chat announcements
+-- Live updates (the kill lines in the chat are the kill feed's, UI/Killfeed.lua)
 --------------------------------------------------------------------------------
 
 local refreshQueued = false
@@ -428,23 +428,12 @@ local function ClassName(classFile)
 end
 UI.ClassName = ClassName
 
-local function Announce(guid, _, record)
-	if not Settings().announce or record.type ~= "K" or guid == ns.Identity.me.guid then return end
-	local info = Stats.AuthorInfo(guid)
-	local zone = Theme.ZoneName(record.mapID) or ""
-	if record.vname then
-		ns.Print(L.ANNOUNCE_KILL:format(info.name, record.vname, tostring(record.vrace or ""), ClassName(record.vclass), zone))
-	else
-		ns.Print(L.ANNOUNCE_KILL_UNKNOWN:format(info.name, zone))
-	end
-end
-
 local function FooterNow()
 	if frame and frame:IsShown() then Util.Guard("footer", RefreshFooter) end
 end
 
 ns.Hook("StatsChanged", QueueRefresh)
 ns.Hook("RosterUpdated", QueueRefresh)
-ns.Hook("RecordStored", Announce)
+ns.Hook("SettingsChanged", QueueRefresh)
 ns.Hook("SyncChanged", FooterNow)
 ns.Hook("PeerSeen", FooterNow)

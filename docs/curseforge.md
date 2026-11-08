@@ -32,12 +32,12 @@ row. Every member running the addon shares its journal with the guild, so
 everyone sees the same board, including the records of members who are
 offline.
 
-**Kill feed.** Tick it in the Options tab and a chat tab named "Kills" docks
-with your other chat tabs. Every kill and death of the guild lands there as
-"X killed Y (2-1)": the score counts, between that member and that enemy,
-the kills of the one named first against the other's. It is off by default.
-The announcements of guild kills in your main chat have a checkbox of their
-own.
+**Kill feed.** Off by default. Tick it in the Options tab and a chat tab
+named "Kills" docks with your other chat tabs. Every kill and death of the
+guild lands there as "X killed Y (2-1)": the score counts, between that
+member and that enemy, the kills of the one named first against the
+other's. Nothing goes to your main chat. Close the tab and the feed turns
+off.
 
 **How it counts.** Kills are the honorable kills the server grants, so an
 assist counts like a killing blow, as in the game; the addon names the
@@ -58,8 +58,8 @@ realm, level, the BattleTag hash, your display name). There is no server.
 
 **Commands.** `/kbs` opens the board, `/kbs status` says where the addon
 stands on this character, `/kbs options` opens the board on its Options
-tab (minimap button, window scale, chat announcements of guild kills, kill
-feed), `/kbs debug` prints the sync state and errors for a bug report.
+tab (minimap button, window scale, kill feed), `/kbs debug` prints the sync
+state and errors for a bug report.
 
 Source, issues and the test harness: https://github.com/Mouchoir/Killed-by-Savages
 
@@ -75,7 +75,8 @@ par le serveur, avec la victime nommée quand le client le permet ; les morts
 viennent du récapitulatif de mort ; en champ de bataille c'est le tableau de
 score final qui compte, pour tous les coéquipiers de guilde. Un onglet
 Options, au bout de la rangée d'onglets, règle le bouton de minicarte,
-l'échelle, les annonces de kills et le fil des kills : un onglet de chat
-dédié où chaque kill et chaque mort de la guilde s'affiche avec le score
-entre le membre et l'ennemi. Rien ne sort du jeu : les données circulent
-entre membres par messages d'addon cachés.
+l'échelle et le fil des kills. Désactivé par défaut, ce fil ouvre une fois
+coché un onglet de chat dédié où chaque kill et chaque mort de la guilde
+s'affiche avec le score entre le membre et l'ennemi, sans rien écrire dans
+le chat principal. Rien ne sort du jeu : les données circulent entre membres
+par messages d'addon cachés.

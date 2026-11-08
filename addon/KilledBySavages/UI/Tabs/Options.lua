@@ -84,25 +84,20 @@ ns.UI.RegisterTab({
 		if slider.High then slider.High:SetText("140%") end
 		frame.slider, frame.scaleValue = slider, scaleValue
 
-		-- The chat: announcements, the kill feed tab.
-		local announce = Checkbox(chat, L.OPTIONS_ANNOUNCE,
-			function() return Settings().announce end,
-			function(value) Settings().announce = value end)
-		announce:SetPoint("TOPLEFT", 12, -TOP)
+		-- The chat: the kill feed, off by default, in a tab of its own when on.
 		local killfeed = Checkbox(chat, L.OPTIONS_KILLFEED,
 			function() return Settings().killfeed end,
 			function(value)
-				Settings().killfeed = value
-				if value then ns.Killfeed.Open() end
+				if value then ns.Killfeed.Enable() else ns.Killfeed.Disable() end
 			end)
-		killfeed:SetPoint("TOPLEFT", announce, "BOTTOMLEFT", 0, -6)
+		killfeed:SetPoint("TOPLEFT", 12, -TOP)
 		local hint = chat:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 		hint:SetPoint("TOPLEFT", killfeed, "BOTTOMLEFT", 30, -2)
 		hint:SetPoint("RIGHT", chat, "RIGHT", -12, 0)
 		hint:SetJustifyH("LEFT")
 		hint:SetTextColor(Theme.Color("muted"))
 		hint:SetText(L.OPTIONS_KILLFEED_HINT:format(L.KILLFEED_TAB))
-		frame.boxes = { minimap, announce, killfeed }
+		frame.boxes = { minimap, killfeed }
 
 		local help = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 		help:SetPoint("TOPLEFT", window, "BOTTOMLEFT", 4, -14)

@@ -499,35 +499,69 @@ function Mock.NewClient(spec)
 			end,
 		}
 		env.DEFAULT_CHAT_FRAME = { AddMessage = function(_, text) client.chat[#client.chat + 1] = text end }
-		-- Chat windows: the general one, and up to nine more an addon may
-		-- open; they outlive a reload, as the game's do.
+		-- Chat windows, as Forever's chat code (1.60.1) keeps them: 1 to 3 are
+		-- the client's own (general, combat log, voice), an addon opens 4 to
+		-- 10. A closed window keeps its name, hidden and out of the dock; a
+		-- docked tab behind another is hidden but docked. They outlive a
+		-- reload, as the game's do; the general tab is selected at login.
 		env.NUM_CHAT_WINDOWS = 10
+		env.Constants = { ChatFrameConstants = { MaxChatWindows = 10 } }
+		env.GENERAL_CHAT_DOCK = {}
 		env.ChatFrame1 = env.DEFAULT_CHAT_FRAME
-		for index, window in pairs(client.windows) do env["ChatFrame" .. index] = window.frame end
-		env.GetChatWindowInfo = function(index)
-			if index == 1 then return "General", 14, 1, 1, 1, 1, true, false, true, false end
+		env.DEFAULT_CHAT_FRAME.GetID = function() return 1 end
+		client.selected = env.DEFAULT_CHAT_FRAME
+		local function ChatActive(index)
+			if index <= 3 then return true end
 			local window = client.windows[index]
-			if not window then return "", 14, 1, 1, 1, 1, false, false, false, false end
-			return window.name, 14, 1, 1, 1, 1, true, false, true, false
+			return window ~= nil and (window.shown or window.docked ~= nil)
 		end
-		env.FCF_OpenNewWindow = function(name)
-			for index = 2, env.NUM_CHAT_WINDOWS do
-				if not client.windows[index] then
-					local window = { name = name, lines = {} }
-					window.frame = {
-						GetID = function() return index end,
-						IsShown = function() return true end,
-						AddMessage = function(_, text) window.lines[#window.lines + 1] = text end,
-					}
+		local function ChatFrameFor(index, window)
+			window.frame = {
+				messageTypeList = {}, channelList = {},
+				GetID = function() return index end,
+				IsShown = function() return window.shown end,
+				AddMessage = function(_, text) window.lines[#window.lines + 1] = text end,
+			}
+			env["ChatFrame" .. index] = window.frame
+		end
+		for index, window in pairs(client.windows) do ChatFrameFor(index, window) end
+		env.FCF_IsChatWindowIndexActive = ChatActive
+		env.GetChatWindowInfo = function(index)
+			if index == 1 then return "General", 14, 1, 1, 1, 1, true, false, 1, false end
+			if index == 2 then return "Combat Log", 14, 1, 1, 1, 1, false, false, 2, false end
+			if index == 3 then return "Voice", 14, 1, 1, 1, 1, false, false, 3, false end
+			local window = client.windows[index]
+			if not window then return "", 14, 1, 1, 1, 1, false, false, nil, false end
+			return window.name, 14, 1, 1, 1, 1, window.shown, false, window.docked, false
+		end
+		-- The first window not in use, cleared, named, docked and selected;
+		-- nothing when all ten are in use.
+		env.FCF_OpenNewWindow = function(name, noDefaultChannels)
+			for index = 4, env.NUM_CHAT_WINDOWS do
+				if not ChatActive(index) then
+					local window = client.windows[index] or {}
+					local dock = 3
+					for _, other in pairs(client.windows) do
+						if other.docked then dock = math.max(dock, other.docked) end
+					end
+					window.name, window.lines, window.shown, window.docked = name, {}, true, dock + 1
 					client.windows[index] = window
-					env["ChatFrame" .. index] = window.frame
+					ChatFrameFor(index, window)
+					if not noDefaultChannels then window.frame.messageTypeList = { "SAY", "YELL", "GUILD" } end
+					client.selected = window.frame
 					return window.frame, index
 				end
 			end
-			return nil
 		end
-		env.ChatFrame_RemoveAllMessageGroups = function() end
-		env.ChatFrame_RemoveAllChannels = function() end
+		env.FCF_Close = function(frame)
+			local window = client.windows[frame:GetID()]
+			if not window then return end
+			window.shown, window.docked = false, nil
+			frame.messageTypeList, frame.channelList = {}, {}
+			if client.selected == frame then client.selected = env.DEFAULT_CHAT_FRAME end
+		end
+		env.FCFDock_GetSelectedWindow = function() return client.selected end
+		env.FCFDock_SelectWindow = function(_, frame) client.selected = frame end
 		-- Chat filters, as the game's chat frame runs them on system lines.
 		env.ChatFrame_AddMessageEventFilter = function(event, fn)
 			local list = client.filters[event] or {}
@@ -543,7 +577,7 @@ function Mock.NewClient(spec)
 		env.C_AddOns = { GetAddOnMetadata = function(_, field) if field == "Version" then return "0.1.0-test" end end }
 		env.C_CVar = { GetCVar = function() return "0" end, GetCVarBool = function() return false end }
 		env.GetCVar = env.C_CVar.GetCVar
-		env.InCombatLockdown = function() return false end
+		env.InCombatLockdown = function() return st.combat == true end
 
 		-- The honor sentences of the French Forever client, as read in game.
 		env.COMBATLOG_HONORGAIN = "%s meurt (victoire honorable : %s). Vous gagnez %d points d’honneur."
@@ -851,6 +885,7 @@ function Mock.NewClient(spec)
 		client.fire("ADDON_LOADED", addon.name)
 		client.fire("PLAYER_LOGIN")
 		client.fire("PLAYER_ENTERING_WORLD", true, false)
+		client.fire("UPDATE_CHAT_WINDOWS")
 	end
 
 	function client.logout()
