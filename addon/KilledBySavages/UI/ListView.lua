@@ -26,7 +26,9 @@ local function HasScrollBox()
 		and type(ScrollUtil) == "table" and Util.Fn(ScrollUtil.InitScrollBoxListWithScrollBar) ~= nil
 end
 
--- Column: { key, title, width, align = "LEFT"|"RIGHT", sort = "number"|"text", icon = "class"|"race" }
+-- Column: { key, title, width, align = "LEFT"|"RIGHT", sort = "number"|"text", icon = "class"|"race",
+--   classColor = true (the row's class) or the row field holding the class file to colour the cell with,
+--   tip = a line under the header's name when the mouse rests on it }
 -- fill(row, data) is the caller's; rows carry one FontString per column.
 function ListView.New(parent, columns, options)
 	options = options or {}
@@ -70,6 +72,15 @@ function ListView.New(parent, columns, options)
 				end
 				view:Refresh()
 			end)
+		end
+		if column.tip then
+			header:SetScript("OnEnter", function(self)
+				if Theme.TooltipStart(self, column.title) then
+					Theme.TooltipLine(column.tip)
+					Theme.TooltipShow()
+				end
+			end)
+			header:SetScript("OnLeave", function() Theme.TooltipHide() end)
 		end
 		view.headers[index] = header
 		x = x + column.width
@@ -153,8 +164,9 @@ function ListView.New(parent, columns, options)
 			elseif column.icon == "race" then
 				Theme.RaceIcon(cell.icon, data.race)
 			end
-			if column.classColor and data.class then
-				cell.text:SetTextColor(Theme.ClassColor(data.class))
+			local classFile = column.classColor and data[column.classColor == true and "class" or column.classColor]
+			if type(classFile) == "string" then
+				cell.text:SetTextColor(Theme.ClassColor(classFile))
 			elseif column.muted then
 				cell.text:SetTextColor(Theme.Color("muted"))
 			else

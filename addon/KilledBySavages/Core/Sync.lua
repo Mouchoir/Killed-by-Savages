@@ -57,6 +57,8 @@ local RECOVERY_WAIT = 120
 local ONLINE_WINDOW = 1800        -- a hello this recent means the author is around
 local BUSY_WAIT = 20              -- before asking again a holder that said it was busy
 local FAIL_RETRY = 300            -- before a holder that failed us gets another chance
+local GONE_WINDOW = 120           -- no whisper to a member the server called absent, unless it speaks again
+local NOT_FOUND_WINDOW = 15       -- a "not playing" answer this soon after our whisper is about it
 
 local LibDeflate = LibStub and LibStub("LibDeflate", true)
 
@@ -71,6 +73,8 @@ local requests = {}               -- "tail:page" -> in-flight request
 local partial = {}                -- "tail:page" -> chunks received so far
 local failedBy = {}               -- author tail -> { [holder canon] = when it failed us }
 local busyUntil = {}              -- holder canon -> when it may be asked again
+local whispered = {}              -- member canon -> when we last whispered it
+local gone = {}                   -- member canon -> when the server said nobody by that name was playing
 local outPages = 0
 local inventorySent = false
 local recovery                    -- { from, to, until } while a crash is being recovered
@@ -136,6 +140,18 @@ local function IsAuthorOnline(tail)
 	return false
 end
 
+-- Whether a member can take a whisper: the server did not answer lately
+-- that nobody by that name was playing, or the member spoke to us since.
+-- The roster's online flag is not trusted here: it lags behind logins by
+-- up to a roster rebuild, while the server's answer is immediate and sure.
+local function MemberAround(canon)
+	if not canon then return false end
+	local goneAt = gone[canon]
+	if not goneAt or Now() - goneAt >= GONE_WINDOW then return true end
+	local peer = peers[canon]
+	return peer ~= nil and peer.at > goneAt
+end
+
 -- The holder's "First Last" name of an author tail: its roster entry.
 local function NameOfTail(tail)
 	local member = Identity.MemberByTail(tail)
@@ -171,12 +187,20 @@ local function Pump()
 		Util.After(0.1, "pump", Pump)
 		return
 	end
+	if item.channel == "WHISPER" and not MemberAround(Identity.Canon(item.target)) then
+		table.remove(queue, 1)
+		if item.onDrop then item.onDrop() end
+		ns.Count("sync.dropOffline")
+		Util.After(0.1, "pump", Pump)
+		return
+	end
 	local result = Sync.SendRaw(item.text, item.channel, item.target)
 	ns.Count("sync.out." .. item.kind .. "." .. result)
 	if result == "AddonMessageThrottle" or result == "ChannelThrottle" then
 		Util.After(THROTTLE_WAIT, "pump", Pump)
 		return
 	end
+	if item.channel == "WHISPER" and result == "Success" then whispered[Identity.Canon(item.target)] = Now() end
 	table.remove(queue, 1)
 	if item.onSent then item.onSent(result) end
 	Util.After(SEND_GAP, "pump", Pump)
@@ -408,12 +432,13 @@ end
 local function BestHolder(tail, failed)
 	local authorName = NameOfTail(tail)
 	local list = holders[tail] or {}
-	if authorName and IsAuthorOnline(tail) and list[Identity.Canon(authorName)] and not Unavailable(failed, Identity.Canon(authorName)) then
-		return authorName, list[Identity.Canon(authorName)]
+	local authorCanon = authorName and Identity.Canon(authorName)
+	if authorCanon and IsAuthorOnline(tail) and MemberAround(authorCanon) and list[authorCanon] and not Unavailable(failed, authorCanon) then
+		return authorName, list[authorCanon]
 	end
 	local bestName, best
 	for canon, info in pairs(list) do
-		if not Unavailable(failed, canon) and InFlightFor(canon) == 0 then
+		if not Unavailable(failed, canon) and InFlightFor(canon) == 0 and MemberAround(canon) then
 			local member = Identity.Member(canon)
 			local complete = info.count >= info.head
 			if member and (not best or (complete and best.count < best.head) or info.head > best.head) then
@@ -457,6 +482,58 @@ function Sync.Schedule()
 			end
 		end
 	end
+end
+
+-- The server answered that nobody by that name is playing: whatever waited
+-- for that member is dropped, its requests fail now rather than at their
+-- timeout, and the next holder is tried.
+local function HolderGone(canon)
+	gone[canon] = Now()
+	local index = 1
+	while index <= #queue do
+		local item = queue[index]
+		if item.channel == "WHISPER" and Identity.Canon(item.target) == canon then
+			table.remove(queue, index)
+			if item.onDrop then item.onDrop() end
+			ns.Count("sync.dropOffline")
+		else
+			index = index + 1
+		end
+	end
+	local dropped = 0
+	for key, request in pairs(requests) do
+		if Identity.Canon(request.holder) == canon then
+			requests[key] = nil
+			partial[key] = nil
+			failedHolders(request.tail)[canon] = Now()
+			dropped = dropped + 1
+		end
+	end
+	if dropped > 0 then ns.Count("sync.holderGone", dropped) end
+	Sync.Schedule()
+	ns.Fire("SyncChanged")
+end
+
+-- A whisper to someone who is not playing gets a system line in the chat
+-- ("No player named '%s' is currently playing."). When the whisper was
+-- ours, the line is ours to hide, and it says the member is gone.
+local filterInstalled = false
+local function InstallNotFoundFilter()
+	if filterInstalled or not Util.Fn(ChatFrame_AddMessageEventFilter) then return end
+	local template = ERR_CHAT_PLAYER_NOT_FOUND_S
+	if type(template) ~= "string" or not template:find("%s", 1, true) then return end
+	local escaped = (template:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0"))
+	local pattern = "^" .. (escaped:gsub("%%%%s", "(.+)")) .. "$"
+	filterInstalled = true
+	ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", function(_, _, message)
+		local name = type(message) == "string" and message:match(pattern) or nil
+		local canon = name and Identity.Canon(name) or nil
+		local at = canon and whispered[canon] or nil
+		if not at or Now() - at > NOT_FOUND_WINDOW then return false end
+		ns.Count("sync.notFoundHidden")
+		Util.Guard("sync-gone", HolderGone, canon)
+		return true
+	end)
 end
 
 local function CheckTimeouts()
@@ -1047,6 +1124,7 @@ function Sync.Status()
 end
 
 local function OnLogin()
+	InstallNotFoundFilter()
 	if C_ChatInfo and Util.Fn(C_ChatInfo.RegisterAddonMessagePrefix) then
 		Util.Call(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX)
 	end

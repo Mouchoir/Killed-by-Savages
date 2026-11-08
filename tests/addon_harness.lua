@@ -625,6 +625,34 @@ check("and the next holder served the page", Held(E, A) == aHead, Held(E, A))
 LeaveBG(B)
 advance(5)
 
+-- A holder that logged off since the roster was last read: the server
+-- answers the whisper that nobody by that name is playing. The line stays
+-- out of the chat, the holder is dropped at once, the next one serves.
+A.login()
+advance(30)
+local Gc = NewClient({ name = "Garrick Stoneholm", guid = Guid(17), class = "PALADIN", guild = "Savages", lifetime = 12, rank = 3 })
+Mock.SetGuildRoster({ { guid = A.guid, rank = 0 }, { guid = B.guid, rank = 2 }, { guid = C.guid, rank = 4 }, { guid = Guid(5), rank = 3 },
+	{ guid = D.guid, rank = 3 }, { guid = E.guid, rank = 3 }, { guid = Gc.guid, rank = 3 } })
+RefreshRosters()
+Gc.login()
+advance(5)
+check("the newcomer's roster shows the author online", Gc.ns.Identity.Member("Aldric Stormhand") ~= nil
+	and Gc.ns.Identity.Member("Aldric Stormhand").online == true)
+A.logout()
+local gState = Gc.ns.Sync.State()
+gState.holders[Atail] = { ["aldric stormhand"] = { head = aHead, count = aHead, at = Mock.Server() } }
+Gc.ns.Sync.Schedule()
+advance(3)
+check("the whisper to the departed member got the server's answer, hidden", Gc.counter("sync.notFoundHidden") == 1, Gc.counter("sync.notFoundHidden"))
+check("the chat never showed it", not Gc.sawSystem("Aucun joueur nommé"))
+check("the holder was dropped at once, not at the timeout", Gc.counter("sync.holderGone") == 1 and Gc.counter("sync.requestTimeout") == 0,
+	Gc.counter("sync.holderGone"))
+gState.holders[Atail]["corwin ashdown"] = { head = aHead, count = aHead, at = Mock.Server() }
+Gc.ns.Sync.Schedule()
+advance(120)
+check("and the next holder served the page", Held(Gc, A) == aHead, Held(Gc, A))
+check("no further whisper went to the departed member", Gc.counter("sync.notFoundHidden") == 1)
+
 --------------------------------------------------------------------------------
 section("Stats: characters, players, guild, hunting board, feed")
 --------------------------------------------------------------------------------
@@ -680,7 +708,11 @@ for _, row in ipairs(Stats.Characters("all", "b")) do
 	if row.guid == Guid(5) and row.name == "Edric Vale" and row.kills == 25 then credited = true end
 end
 check("and ranked with the others in the battleground view", credited)
-check("battleground enemy deaths are the guild's killing blows on the board", Stats.Guild("all", "b").distinct == 7, Stats.Guild("all", "b").distinct)
+-- The first board holds 7 killing blows of ours, but Edric took part in 25
+-- deaths; the second battleground had 2 HKs and no blow.
+check("battleground enemy deaths are the most honorable kills of one member on the board", Stats.Guild("all", "b").distinct == 27, Stats.Guild("all", "b").distinct)
+check("live battleground kills never count as enemy deaths of their own", Stats.Guild("all", "all").distinct == Stats.Guild("all", "w").distinct + 27,
+	Stats.Guild("all", "all").distinct .. "/" .. Stats.Guild("all", "w").distinct)
 check("everything happened this week", Stats.Character(A.guid, "week", "all").kills == all.kills and Stats.Character(A.guid, "last", "all").kills == 0)
 check("the week anchor came from the client", A.db().weekAnchor == Mock.Server() + 30 * 3600 or math.abs(A.db().weekAnchor - (Mock.Server() + 30 * 3600)) < 200)
 
@@ -750,7 +782,7 @@ advance(8)
 check("a second member's record of the same match counts the teammate once", Stats.Character(Guid(5), "all", "b").kills == 25
 	and Stats.Character(B.guid, "all", "b").kills == 5 and Stats.Character(B.guid, "all", "b").kb == 1,
 	Stats.Character(Guid(5), "all", "b").kills .. "/" .. Stats.Character(B.guid, "all", "b").kills)
-check("the guild's battleground blows count once per match too", Stats.Guild("all", "b").distinct == 8, Stats.Guild("all", "b").distinct)
+check("the guild's battleground deaths count once per match too", Stats.Guild("all", "b").distinct == 27, Stats.Guild("all", "b").distinct)
 
 --------------------------------------------------------------------------------
 section("Compaction: old pages packed, still served and counted")

@@ -423,7 +423,10 @@ end
 -- The guild
 --------------------------------------------------------------------------------
 
--- All kill records held, from every journal, filtered and sorted by time.
+-- All world kill records held, from every journal, filtered and sorted by
+-- time. Battleground kills name nobody and carry no position, so they
+-- would each count as an enemy death of their own: matches count them
+-- instead (see Stats.Guild).
 local function AllKills(period, bucket)
 	local list = {}
 	local current = Stats.CurrentWeek()
@@ -431,7 +434,8 @@ local function AllKills(period, bucket)
 		local agg = Stats.AuthorAggregate(guid)
 		for _, kill in ipairs(agg.kills) do
 			local record = kill.record
-			if (bucket == "all" or record.bucket == bucket) and InPeriod(period, Stats.WeekIndex(record.t), current) then
+			if record.bucket ~= "b" and (bucket == "all" or record.bucket == bucket)
+				and InPeriod(period, Stats.WeekIndex(record.t), current) then
 				list[#list + 1] = { t = record.t, record = record, author = guid, provisional = kill.provisional }
 			end
 		end
@@ -496,8 +500,12 @@ function Stats.Guild(period, bucket)
 		if ns.db.authors[guid] then sum.authors = sum.authors + 1 end
 	end
 	Finish(sum)
-	-- Enemy deaths: in the world each victim once; in battlegrounds the
-	-- killing blows of the guild's members, each one an enemy down.
+	-- Enemy deaths. In the world each victim once, from the kill records.
+	-- In a battleground victims are secret, so each match counts the
+	-- guild's killing blows on its scoreboard or, when higher, the
+	-- honorable kills of the member who took part in the most deaths: a
+	-- floor, never the members' sum, since their honorable kills overlap
+	-- when they fight together.
 	sum.distinct = bucket == "b" and 0 or DistinctKills(AllKills(period, bucket))
 	if bucket ~= "w" then
 		local current = Stats.CurrentWeek()
@@ -505,7 +513,12 @@ function Stats.Guild(period, bucket)
 			-- A world scoreboard's deaths are already counted from the
 			-- witnesses' kill records.
 			if not match.world and InPeriod(period, match.week, current) then
-				for _, line in pairs(match.lines) do sum.distinct = sum.distinct + (line.kb or 0) end
+				local blows, most = 0, 0
+				for _, line in pairs(match.lines) do
+					blows = blows + (line.kb or 0)
+					most = math.max(most, line.hk or 0)
+				end
+				sum.distinct = sum.distinct + math.max(blows, most)
 			end
 		end
 	end

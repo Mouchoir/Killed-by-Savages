@@ -16,6 +16,7 @@ read_globals = {
 	"ScrollUtil", "CreateScrollBoxListLinearView", "CreateDataProvider", "ScrollBoxConstants",
 	"PanelTemplates_SelectTab", "PanelTemplates_DeselectTab", "PanelTemplates_SetNumTabs", "PanelTemplates_TabResize",
 	"Settings", "STANDARD_TEXT_FONT", "GameFontNormalHuge", "GameFontNormalLarge", "LOCALIZED_CLASS_NAMES_MALE",
+	"ChatFrame_AddMessageEventFilter", "ERR_CHAT_PLAYER_NOT_FOUND_S",
 
 	-- Where we are
 	"IsInInstance", "GetInstanceInfo", "GetRealZoneText", "GetSubZoneText", "C_Map", "C_PvP",

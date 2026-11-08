@@ -224,9 +224,15 @@ for _, horde in ipairs(HORDE) do
 end
 Mock.HORDE = HORDE
 
+-- The French client's answer to a whisper nobody can receive.
+local NOT_PLAYING = "Aucun joueur nommé '%s' ne joue actuellement."
+Mock.NOT_PLAYING = NOT_PLAYING
+
 local function deliver(from, prefix, text, channel, target)
 	network.sent[#network.sent + 1] = { from = from.name, channel = channel, text = text, at = now, target = target }
+	local found = false
 	for _, client in ipairs(clients) do
+		if channel == "WHISPER" and client.online and target == client.state.name then found = true end
 		if client.online and client.prefixes[prefix] then
 			local st, fs = client.state, from.state
 			local reach = false
@@ -251,6 +257,12 @@ local function deliver(from, prefix, text, channel, target)
 				end)
 			end
 		end
+	end
+	if channel == "WHISPER" and not found then
+		-- The server tells the sender, as a system line in its chat.
+		schedule(0.05, function()
+			if from.online and from.system then from.system(NOT_PLAYING:format(target)) end
+		end)
 	end
 end
 
@@ -333,7 +345,7 @@ Mock.NewFrame = NewFrame
 function Mock.NewClient(spec)
 	local addon = spec.addon or Mock.PROBE
 	local client = {
-		name = spec.name, guid = spec.guid, online = false, prefixes = {}, chat = {},
+		name = spec.name, guid = spec.guid, online = false, prefixes = {}, chat = {}, filters = {},
 		frames = {}, forbidden = {}, saved = spec.saved, generation = 0, addon = addon,
 	}
 	local first, surname = spec.name:match("^(%S+) (.+)$")
@@ -487,6 +499,13 @@ function Mock.NewClient(spec)
 			end,
 		}
 		env.DEFAULT_CHAT_FRAME = { AddMessage = function(_, text) client.chat[#client.chat + 1] = text end }
+		-- Chat filters, as the game's chat frame runs them on system lines.
+		env.ChatFrame_AddMessageEventFilter = function(event, fn)
+			local list = client.filters[event] or {}
+			list[#list + 1] = fn
+			client.filters[event] = list
+		end
+		env.ERR_CHAT_PLAYER_NOT_FOUND_S = NOT_PLAYING
 		env.C_Timer = { After = function(delay, fn) later(delay, fn) end }
 		env.GetTime = function() return now end
 		env.GetServerTime = function() return math.floor(server) end
@@ -772,7 +791,27 @@ function Mock.NewClient(spec)
 		end
 	end
 
+	-- A system line reaches the chat unless a filter of the addon hides it.
+	-- Shown lines are kept apart from what the addon prints itself.
+	client.systemLines = {}
+	function client.system(text)
+		for _, fn in ipairs(client.filters.CHAT_MSG_SYSTEM or {}) do
+			if fn(nil, "CHAT_MSG_SYSTEM", text) then return false end
+		end
+		client.systemLines[#client.systemLines + 1] = text
+		client.fire("CHAT_MSG_SYSTEM", text)
+		return true
+	end
+
+	function client.sawSystem(fragment)
+		for _, text in ipairs(client.systemLines) do
+			if text:find(fragment, 1, true) then return true end
+		end
+		return false
+	end
+
 	function client.login()
+		client.filters = {}
 		boot()
 		client.online = true
 		-- A test seam: runs once the files are loaded, before any event.

@@ -29,7 +29,8 @@ it was written (see `probe/`):
   readable and is kept as a match record: your row, and the row of every
   guild teammate on the board, credited with or without the addon. The
   "enemies killed" of a battleground are the guild's killing blows on that
-  board.
+  board or, when higher, the HKs of the member who took part in the most
+  deaths: a floor, since members' HKs overlap when they fight together.
 - **The guild total** counts each enemy death once, whoever took part.
 - **Players** are the characters of one Battle.net account that are still in
   the guild, grouped by a salted hash of the BattleTag; the tag itself is

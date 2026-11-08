@@ -24,11 +24,13 @@ local function FeedRows(period, bucket)
 				row.enemy = record.vname or L.EVENT_UNKNOWN_VICTIM
 				row.race = record.vrace
 				row.enemyClass = ns.UI.ClassName(record.vclass)
+				row.enemyClassFile = record.vclass
 			else
 				row.event = L.EVENT_DEATH
 				row.enemy = record.kname or "?"
 				row.race = record.krace
 				row.enemyClass = record.kkind == "e" and L.TOOLTIP_PET or ns.UI.ClassName(record.kclass)
+				row.enemyClassFile = record.kkind ~= "e" and record.kclass or nil
 			end
 			row.zone = record.sub or Theme.ZoneName(record.mapID) or ""
 			rows[#rows + 1] = row
@@ -56,7 +58,7 @@ ns.UI.RegisterTab({
 			{ key = "member", title = L.COL_MEMBER, width = 160, icon = "class", classColor = true, sort = "text" },
 			{ key = "event", title = L.COL_EVENT, width = 100, muted = true, sort = "text" },
 			{ key = "enemy", title = L.COL_ENEMY, width = 170, icon = "race", sort = "text" },
-			{ key = "enemyClass", title = L.COL_CLASS, width = 85, muted = true },
+			{ key = "enemyClass", title = L.COL_CLASS, width = 85, muted = true, classColor = "enemyClassFile" },
 			{ key = "zone", title = L.COL_ZONE, width = 175, muted = true, sort = "text" },
 		}, { emptyText = L.EMPTY_FEED })
 		frame.view.panel:SetPoint("TOPLEFT", 0, -46)
