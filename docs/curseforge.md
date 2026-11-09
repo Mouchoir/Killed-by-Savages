@@ -5,6 +5,9 @@ the same thing. Game: World of Warcraft, game version 1.60.1 (Forever,
 interface 16001). Category: PvP. License: GNU General Public License
 version 3.0. Source: https://github.com/Mouchoir/Killed-by-Savages.
 
+The screenshots (names pixelated) are in `docs/screenshots`; the same four
+are in the project's gallery, and the description shows them from there.
+
 ## Name
 
 Killed by Savages
@@ -14,80 +17,96 @@ Killed by Savages
 Guild kill board for WoW: Forever: who killed how many enemies, per player,
 per character and for the whole guild, in the world and in battlegrounds.
 
+## Gallery
+
+| File | Title | Description |
+| --- | --- | --- |
+| `players.png` | Players ranking | The home view: every player of the guild with kills, killing blows, assists, deaths and K/D, the enemies killed and the next guild milestone above. |
+| `me-hunting-boards.png` | Your tab and the hunting boards | Your characters and numbers, the enemies you kill the most and the ones who kill you the most. |
+| `milestone.png` | Guild milestone | The bar toward the next guild milestone, explained on hover. |
+| `characters.png` | Characters ranking | Every character on its own, in the world, in battlegrounds or both. |
+
 ## Description
 
-**Killed by Savages** is a guild kill board for World of Warcraft: Forever.
-It counts the enemies each member kills and shows them by player (all
-characters of one account together), by character and for the whole guild,
-in the open world and in battlegrounds, over the current week, the last
-week or all time. Built for the guild Savages; it works for any guild, on
-either faction.
+## Your guild's kill board for World of Warcraft: Forever
 
-**The board** (`/kbs`, or the minimap button): the players ranking, the
-characters ranking, the guild tab with the enemies killed, the next
-milestone and the latest kills and deaths, the hunting board with the
-enemies the guild kills the most and those who kill it, a Me tab with your
-own characters and boards, and the Options tab at the right end of the tab
-row. Every member running the addon shares its journal with the guild, so
-everyone sees the same board, including the records of members who are
-offline.
+**Every enemy your guildmates bring down, counted, ranked and shared.**
+Killed by Savages turns world PvP into a live guild leaderboard: who hunts
+the most, who lands the killing blows, who keeps dying, this week, last
+week or since day one. Install it, and every member running it shares
+their kills with the rest of the guild, right inside the game.
 
-**Kill feed.** Off by default. Tick it in the Options tab and every kill
-and death of the guild in the world shows in your chat as "X killed Y
-(2-1)": the score counts, between that member and that enemy, the kills of
-the one named first against the other's. A battleground match gives one
-line when it ends, with the member's kills, killing blows and deaths. The
-lines go to a chat tab named "Kills", docked with your other chat tabs, or
-to your main chat if you untick the tab option. Close the tab and the feed
-turns off.
+![The players ranking, the enemies killed and the next guild milestone](screenshots/players.png)
 
-**Updates.** When a guildmate runs a newer version of the addon, you are
-told once in the chat. The board's footer says how many players of the
-guild still run an older version; hover the number for their names.
+### What you get
 
-**How it counts.** Kills are the honorable kills the server grants, so an
-assist counts like a killing blow, as in the game; the addon names the
-victim a few seconds later from the killing blow of you, your pet or your
-group, or from the enemy who died next to you. Killing blows and assists are
-shown apart. Deaths come from the death recap, with the killer and the
-spell. In a battleground the enemies are secret, so the final scoreboard is
-kept instead, with every guild teammate on it, credited with or without the
-addon. The guild total counts each enemy death once, whoever took part.
-Players are the characters of one Battle.net account still in the guild,
-grouped by a salted hash of the BattleTag; the tag itself is never kept or
-sent.
+- **Guild leaderboards.** By player (all the characters of one account
+  together), by character, and for the whole guild. Open world,
+  battlegrounds or both; this week, last week or all time.
+- **Kills, killing blows and assists, apart.** An assist counts the way the
+  game counts it, and you still see who finished the job.
+- **The hunting board.** The enemies your guild kills the most, and the
+  ones who kill you the most. Know your prey. Know your nemesis.
+- **Guild milestones.** A bar toward the next one, from 100 enemy deaths
+  all the way to 100,000, each enemy counted once however many of you took
+  part.
+- **Battlegrounds done right.** The game hides enemies during a match, so
+  the final scoreboard is kept instead, and every guildmate on it is
+  credited, with or without the addon.
+- **Kill feed.** Optional: every guild kill and death in your chat as "X
+  killed Y (2-1)", in a tab of its own or in your main chat.
+- **Your own corner.** Your characters, your numbers, your own hunting
+  board, and the name the board shows for you.
+- **Syncs by itself.** Kills land on everyone's board as they happen, and
+  members who were offline catch up from whoever is online. The board even
+  tells you who still runs an old version.
 
-**What leaves your client.** Only hidden addon messages to your own guild,
-never chat text, never anything outside the game: your kill and death
-records, your battleground scoreboards and your profile (name, class, race,
-realm, level, the BattleTag hash, your display name, the addon version).
-There is no server.
+![The Me tab: your characters, the enemies you kill the most and the ones who kill you](screenshots/me-hunting-boards.png)
 
-**Commands.** `/kbs` opens the board, `/kbs status` says where the addon
-stands on this character, `/kbs options` opens the board on its Options
-tab (minimap button, window scale, kill feed), `/kbs debug` prints the sync
-state and errors for a bug report.
+### How it counts
 
-Source, issues and the test harness: https://github.com/Mouchoir/Killed-by-Savages
+Kills are the honorable kills the server grants, so an assist counts like a
+killing blow, as in the game. The victim is named from the killing blow of
+you, your pet or your group, or from the enemy who died next to you. Deaths
+come from the death recap, with the killer and the spell. The guild total
+counts each enemy death once, whoever took part. Players are grouped by a
+salted hash of their BattleTag: the tag itself is never kept or sent.
+
+![The guild milestone explained on hover](screenshots/milestone.png)
+
+### What leaves your client
+
+Only hidden addon messages to your own guild, never chat text, never
+anything outside the game: your kill and death records, your battleground
+scoreboards, your profile (name, class, race, realm, level, the BattleTag
+hash, your display name, the addon version) and, every ten minutes, your
+addon version. There is no server.
+
+### Commands
+
+`/kbs` opens the board (so does the minimap button), `/kbs status` says
+where the addon stands, `/kbs options` opens its options, `/kbs debug`
+prints the sync state for a bug report.
+
+![The characters ranking](screenshots/characters.png)
+
+Built for the guild Savages, made for any guild, on either faction. In
+English and French. Source, issues and the test harness:
+https://github.com/Mouchoir/Killed-by-Savages
 
 ---
 
-**Killed by Savages** est un tableau de chasse de guilde pour World of
-Warcraft: Forever : les ennemis tués par chaque membre, par joueur (tous
-ses personnages réunis), par personnage et pour toute la guilde, en monde
-ouvert et en champ de bataille, sur la semaine, la semaine passée ou depuis
-toujours. Conçu pour la guilde Savages, il marche pour n'importe quelle
-guilde, dans les deux factions. Un kill est une victoire honorable accordée
-par le serveur, avec la victime nommée quand le client le permet ; les morts
-viennent du récapitulatif de mort ; en champ de bataille c'est le tableau de
-score final qui compte, pour tous les coéquipiers de guilde. Un onglet
-Options, au bout de la rangée d'onglets, règle le bouton de minicarte,
-l'échelle et le fil des kills. Désactivé par défaut, ce fil affiche une fois
-coché chaque kill et chaque mort de la guilde en monde ouvert avec le score
-entre le membre et l'ennemi, et chaque match de champ de bataille en une
-ligne à sa fin, dans un onglet de chat dédié ou, au choix, dans le chat
-principal. Quand un membre de la guilde a une version plus récente de
-l'addon, un message dans le chat le signale, et le bas du tableau dit
-combien de joueurs ne sont pas à jour, avec leurs noms au survol. Rien ne
-sort du jeu : les
-données circulent entre membres par messages d'addon cachés.
+### En français
+
+**Le tableau de chasse de votre guilde sur WoW Forever.** Chaque ennemi
+abattu par un membre est compté, nommé quand le jeu le permet, et partagé
+avec toute la guilde, directement en jeu. Classements par joueur (tous ses
+personnages réunis), par personnage et pour la guilde, en monde ouvert et
+en champ de bataille, sur la semaine, la semaine passée ou depuis toujours.
+Coups fatals et assists à part, tableau de chasse avec vos proies favorites
+et vos pires ennemis, jalons de guilde, fil des kills en option (dans un
+onglet dédié ou dans le chat principal) et un onglet rien que pour vous. En
+champ de bataille, le tableau de score final crédite chaque membre de la
+guilde présent, avec ou sans l'addon. Le tableau signale aussi qui n'a pas
+l'addon à jour. Aucun serveur, aucun site : les données circulent entre
+membres par messages d'addon cachés. Interface en français et en anglais.
