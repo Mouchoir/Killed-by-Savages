@@ -288,7 +288,18 @@ local function NewFrame(client, kind, name)
 	function methods.Hide(self) self.shown = false end
 	function methods.IsShown(self) return self.shown end
 	function methods.IsVisible(self) return self.shown end
-	function methods.SetText(self, text) self.text = text end
+	function methods.SetText(self, text)
+		local before = self.text
+		self.text = text
+		-- An edit box hears of every change of its text, typed or not (userInput false).
+		if self.kind == "EditBox" and text ~= before and self.scripts.OnTextChanged then
+			self.scripts.OnTextChanged(self, false)
+		end
+	end
+	function methods.SetEnabled(self, enabled) self.enabled = enabled and true or false end
+	function methods.Enable(self) self.enabled = true end
+	function methods.Disable(self) self.enabled = false end
+	function methods.IsEnabled(self) return self.enabled ~= false end
 	function methods.SetTextColor(self, r, g, b, a) self.color = { r, g, b, a } end
 	function methods.GetText(self) return self.text end
 	function methods.GetName(self) return self.name end

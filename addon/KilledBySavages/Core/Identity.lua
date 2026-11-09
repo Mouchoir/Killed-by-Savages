@@ -266,12 +266,21 @@ function Identity.Alias()
 	return nil
 end
 
-function Identity.SetAlias(text)
-	if type(text) ~= "string" then text = "" end
+-- A display name as it is kept: trimmed, cleaned, at most 24 letters ("" for none).
+function Identity.CleanAlias(text)
+	if type(text) ~= "string" then return "" end
 	text = text:gsub("^%s+", ""):gsub("%s+$", "")
 	text = Util.Clean(text)
 	if #text > 24 then text = (Util.Cut(text, 24)) end
-	ns.db.settings.alias = text ~= "" and text or nil
-	if ns.Fire then ns.Fire("AliasChanged", ns.db.settings.alias) end
-	return ns.db.settings.alias
+	return text
+end
+
+-- Takes effect at once and goes out with the profile; the same name again does nothing.
+function Identity.SetAlias(text)
+	text = Identity.CleanAlias(text)
+	local alias = text ~= "" and text or nil
+	if alias == Identity.Alias() then return alias end
+	ns.db.settings.alias = alias
+	if ns.Fire then ns.Fire("AliasChanged", alias) end
+	return alias
 end

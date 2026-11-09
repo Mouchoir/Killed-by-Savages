@@ -66,6 +66,14 @@ ns.UI.RegisterTab({
 			box:ClearFocus()
 			ns.UI.Refresh()
 		end)
+		frame.apply = apply
+		-- A name takes effect as soon as it is chosen: Apply only wakes up while
+		-- the box holds another name than the one in use.
+		local function UpdateApply()
+			apply:SetEnabled(Identity.CleanAlias(box:GetText()) ~= (Identity.Alias() or ""))
+		end
+		frame.UpdateApply = UpdateApply
+		box:HookScript("OnTextChanged", UpdateApply)
 		local hint = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 		hint:SetPoint("LEFT", apply, "RIGHT", 12, 0)
 		hint:SetPoint("RIGHT", frame, "RIGHT", -4, 0)
@@ -93,7 +101,7 @@ ns.UI.RegisterTab({
 			{ key = "kb", title = L.COL_KB_SHORT, width = 60, align = "RIGHT", sort = "number", format = Theme.Number },
 			{ key = "deaths", title = L.COL_DEATHS, width = 60, align = "RIGHT", sort = "number", format = Theme.Number },
 			{ key = "useName", title = "", width = 140, button = {
-				text = L.ME_USE_NAME, onClick = UseName,
+				text = L.ME_USE_NAME, selectedText = L.ME_NAME_IN_USE, onClick = UseName,
 				selected = function(data) return data.name == ShownName() end,
 			} },
 		}, { emptyText = L.EMPTY_ME, sortKey = "kills", tooltip = ns.UI.CharacterTooltip })
@@ -109,6 +117,7 @@ ns.UI.RegisterTab({
 	end,
 	Refresh = function(frame, period, bucket)
 		if not frame.box:HasFocus() then frame.box:SetText(Identity.Alias() or "") end
+		frame.UpdateApply()
 		local rows = MyCharacters(period, bucket)
 		local sum = { kills = 0, kb = 0, deaths = 0 }
 		for _, row in ipairs(rows) do

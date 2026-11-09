@@ -29,8 +29,8 @@ end
 -- Column: { key, title, width, align = "LEFT"|"RIGHT", sort = "number"|"text", icon = "class"|"race",
 --   classColor = true (the row's class) or the row field holding the class file to colour the cell with,
 --   tip = a line under the header's name when the mouse rests on it,
---   button = { text, onClick = fn(data), selected = fn(data) }: an action on the row's item, a dark
---   button lit and inert on the rows where it is already done }
+--   button = { text, onClick = fn(data), selected = fn(data), selectedText }: an action on the row's
+--   item, a dark button lit and inert on the rows where it is already done, saying selectedText there }
 -- fill(row, data) is the caller's; rows carry one FontString per column.
 function ListView.New(parent, columns, options)
 	options = options or {}
@@ -174,7 +174,9 @@ function ListView.New(parent, columns, options)
 		for index, column in ipairs(columns) do
 			local cell = row.cells[index]
 			if cell.button then
-				cell.button:SetSelected(column.button.selected ~= nil and column.button.selected(data) == true)
+				local done = column.button.selected ~= nil and column.button.selected(data) == true
+				cell.button:SetSelected(done)
+				cell.button:SetLabel(done and column.button.selectedText or column.button.text)
 			else
 				local value = data[column.key]
 				if column.format then value = column.format(value, data) end

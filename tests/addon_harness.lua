@@ -1380,18 +1380,39 @@ local function ChosenNames()
 		return nil
 	end
 	local button, character = UseButton()
+	local box, apply = window.tabFrames.me.box, window.tabFrames.me.apply
 	check("each of my characters has a button for its name, unlit while another name is shown", button ~= nil and character ~= nil
 		and button.label.text == A.ns.L.ME_USE_NAME and button.selected ~= true and MyPlayerName() ~= character.name, MyPlayerName())
+	check("Apply rests while the box shows the name in use", apply ~= nil and box.text == "Aldric the Bold" and apply:IsEnabled() == false)
 	button:GetScript("OnClick")(button)
 	advance(10)
 	button = UseButton()
 	check("the button makes that name mine: in the box, on the board, for the guild, and lit", A.db().settings.alias == character.name
-		and window.tabFrames.me.box.text == character.name and MyPlayerName() == character.name
+		and box.text == character.name and MyPlayerName() == character.name
 		and B.db().authors[A.guid].profile.alias == character.name and button.selected == true, A.db().settings.alias)
+	check("chosen, the name needs nothing more: its button says it is the current one and Apply rests",
+		button.label.text == A.ns.L.ME_NAME_IN_USE and apply:IsEnabled() == false, button.label.text)
 	local profilesSent = A.counter("sync.out.P.Success")
 	button:GetScript("OnClick")(button)
 	advance(10)
 	check("lit, it does nothing more", A.db().settings.alias == character.name and A.counter("sync.out.P.Success") == profilesSent,
+		A.counter("sync.out.P.Success") - profilesSent)
+	-- A name typed by hand wakes Apply up; Apply takes it and rests again.
+	box:SetText("Grim Warden")
+	check("a name typed in the box wakes Apply up", apply:IsEnabled() == true)
+	box:SetText("  " .. character.name .. " ")
+	check("the name in use typed again leaves Apply resting", apply:IsEnabled() == false)
+	box:SetText("Grim Warden")
+	apply:GetScript("OnClick")(apply)
+	advance(10)
+	button = UseButton()
+	check("Apply takes the typed name and rests, the character's button offers its name again", A.db().settings.alias == "Grim Warden"
+		and B.db().authors[A.guid].profile.alias == "Grim Warden" and apply:IsEnabled() == false
+		and button.label.text == A.ns.L.ME_USE_NAME and button.selected ~= true, A.db().settings.alias)
+	profilesSent = A.counter("sync.out.P.Success")
+	box:GetScript("OnEnterPressed")(box)
+	advance(10)
+	check("Enter on the name in use sends nothing", A.counter("sync.out.P.Success") == profilesSent,
 		A.counter("sync.out.P.Success") - profilesSent)
 	A.ns.Identity.SetAlias("Aldric the Bold")
 	A.ns.UI.Refresh()
