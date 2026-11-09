@@ -68,7 +68,11 @@ and deaths give no line: the match gives one when it ends, from its
 scoreboard, "X finished a match in Arathi Basin: 12 kills, 3 killing blows,
 4 deaths". Nothing goes to the main chat, unless the client has no chat
 window to spare. Closing the tab turns the feed off; unticking the feed
-closes its tab. The display name of a player is set in the Me tab.
+closes its tab.
+
+A player shows on the players ranking under its display name alone, its
+characters in the tooltip. The name is set in the Me tab: any name, or the
+name of one of its characters with the button next to it.
 
 The window's footer says where the sync with the guild stands: the seconds
 before the login announcement, the pages coming in, or how many journals are

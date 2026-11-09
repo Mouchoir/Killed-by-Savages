@@ -1359,6 +1359,45 @@ end)())
 check("the hunt boards fill", #Rows(window.tabFrames.hunt.victims) > 0 and #Rows(window.tabFrames.hunt.killers) > 0)
 UI.SelectTab("me")
 check("the me tab lists my characters and shows my alias", #Rows(window.tabFrames.me.view) == 1 and window.tabFrames.me.box.text == "Aldric the Bold")
+
+-- A player is the name it chose, with no class of its own to show. Next to
+-- each of my characters, a button makes its name mine in one click.
+local function ChosenNames()
+	local nameCell = Rows(playersTab.view)[1] and Rows(playersTab.view)[1].row.cells[2]
+	local sand = A.ns.Theme.COLORS.text
+	check("a player shows its name alone: no class icon, no class colour", nameCell ~= nil and nameCell.icon == nil
+		and nameCell.text.color ~= nil and nameCell.text.color[1] == sand[1] and nameCell.text.color[2] == sand[2]
+		and nameCell.text.color[3] == sand[3])
+	local meView = window.tabFrames.me.view
+	local function UseButton()
+		local first = Rows(meView)[1]
+		return first and first.row.cells[6] and first.row.cells[6].button, first and first.row.data
+	end
+	local function MyPlayerName()
+		for _, row in ipairs(Stats.Players("all", "all")) do
+			if row.me then return row.name end
+		end
+		return nil
+	end
+	local button, character = UseButton()
+	check("each of my characters has a button for its name, unlit while another name is shown", button ~= nil and character ~= nil
+		and button.label.text == A.ns.L.ME_USE_NAME and button.selected ~= true and MyPlayerName() ~= character.name, MyPlayerName())
+	button:GetScript("OnClick")(button)
+	advance(10)
+	button = UseButton()
+	check("the button makes that name mine: in the box, on the board, for the guild, and lit", A.db().settings.alias == character.name
+		and window.tabFrames.me.box.text == character.name and MyPlayerName() == character.name
+		and B.db().authors[A.guid].profile.alias == character.name and button.selected == true, A.db().settings.alias)
+	local profilesSent = A.counter("sync.out.P.Success")
+	button:GetScript("OnClick")(button)
+	advance(10)
+	check("lit, it does nothing more", A.db().settings.alias == character.name and A.counter("sync.out.P.Success") == profilesSent,
+		A.counter("sync.out.P.Success") - profilesSent)
+	A.ns.Identity.SetAlias("Aldric the Bold")
+	A.ns.UI.Refresh()
+	advance(10)
+end
+ChosenNames()
 UI.SetPeriod("last")
 check("a period without data shows the empty state", window.tabFrames.me.view.empty.shown == true)
 UI.SetPeriod("all")
@@ -1696,15 +1735,23 @@ local function NewerVersions()
 		SentBy(netMark, A, "V") == 1 and SentSince(netMark, "GUILD", "V") == 1, SentSince(netMark, "GUILD", "V"))
 	check("and is told once", Told(B, chatB, "0.1.16") == 1)
 
-	-- Two members on the newer version: one answer only.
+	-- Two members on the newer version: one answers, the other hears it and
+	-- keeps quiet. Both answer only when they send within the time an
+	-- answer takes to arrive, which costs one message.
 	Session(C, "0.1.16")
 	chatB, netMark = #B.chat, #network.sent
 	local quiet = A.counter("sync.versionAnswerSuppressed") + C.counter("sync.versionAnswerSuppressed")
 		+ A.counter("sync.skipped.V") + C.counter("sync.skipped.V")
 	Session(B, "0.1.15", function() OlderCopy(B, A) OlderCopy(B, C) end)
-	check("with two members on the newer version, one answers", SentSince(netMark, "GUILD", "V") == 1
-		and A.counter("sync.versionAnswerSuppressed") + C.counter("sync.versionAnswerSuppressed")
-		+ A.counter("sync.skipped.V") + C.counter("sync.skipped.V") == quiet + 1, SentSince(netMark, "GUILD", "V"))
+	local answeredAt = {}
+	for index = netMark + 1, #network.sent do
+		local message = network.sent[index]
+		if message.channel == "GUILD" and message.text:sub(1, 2) == "V^" then answeredAt[#answeredAt + 1] = message.at end
+	end
+	local hushed = A.counter("sync.versionAnswerSuppressed") + C.counter("sync.versionAnswerSuppressed")
+		+ A.counter("sync.skipped.V") + C.counter("sync.skipped.V") == quiet + 1
+	check("with two members on the newer version, one answers, or both when they send at once",
+		(#answeredAt == 1 and hushed) or (#answeredAt == 2 and math.abs(answeredAt[1] - answeredAt[2]) < 0.1), #answeredAt)
 	check("and the member is told once", Told(B, chatB, "0.1.16") == 1)
 
 	-- Nobody on the newer version online: the profiles held tell it at login.

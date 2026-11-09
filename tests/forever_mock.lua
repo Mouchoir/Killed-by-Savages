@@ -289,6 +289,7 @@ local function NewFrame(client, kind, name)
 	function methods.IsShown(self) return self.shown end
 	function methods.IsVisible(self) return self.shown end
 	function methods.SetText(self, text) self.text = text end
+	function methods.SetTextColor(self, r, g, b, a) self.color = { r, g, b, a } end
 	function methods.GetText(self) return self.text end
 	function methods.GetName(self) return self.name end
 	function methods.GetWidth(self) return self.width or 100 end

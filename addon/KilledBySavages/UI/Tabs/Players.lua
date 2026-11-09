@@ -2,6 +2,8 @@ local _, ns = ...
 
 --------------------------------------------------------------------------------
 -- Players tab: every member's characters together, ranked. The home view.
+-- A player is the name it chose, with no class to show: its characters
+-- are in the tooltip.
 --------------------------------------------------------------------------------
 
 local Theme = ns.Theme
@@ -28,7 +30,7 @@ ns.UI.RegisterTab({
 	Build = function(frame)
 		frame.view = ListView.New(frame, {
 			{ key = "rank", title = L.COL_RANK, width = 44, align = "RIGHT", muted = true },
-			{ key = "name", title = L.COL_PLAYER, width = 250, icon = "class", classColor = true, sort = "text" },
+			{ key = "name", title = L.COL_PLAYER, width = 250, sort = "text" },
 			{ key = "kills", title = L.COL_KILLS, width = 90, align = "RIGHT", sort = "number", format = Theme.Number },
 			{ key = "kb", title = L.COL_KB, width = 110, align = "RIGHT", sort = "number", format = Theme.Number },
 			{ key = "assists", title = L.COL_ASSISTS, width = 90, align = "RIGHT", sort = "number", format = Theme.Number },

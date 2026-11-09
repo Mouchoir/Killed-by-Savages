@@ -17,6 +17,16 @@ local function MyPlayerKey()
 	return Identity.me.playerKey
 end
 
+-- The name the board shows for me: my alias, else my main character's.
+local function ShownName()
+	local alias = Identity.Alias()
+	if alias then return alias end
+	for _, row in ipairs(Stats.Players("all", "all")) do
+		if row.me then return row.characters[1] and row.characters[1].name or row.name end
+	end
+	return nil
+end
+
 local function MyCharacters(period, bucket)
 	local rows = {}
 	local key = MyPlayerKey()
@@ -69,12 +79,23 @@ ns.UI.RegisterTab({
 
 		-- My characters across the top (a few rows), my two hunting boards
 		-- side by side below, as wide as the hunt tab's so their columns fit.
+		-- A character's name as my display name, in one click.
+		local function UseName(data)
+			Identity.SetAlias(data.name)
+			box:SetText(Identity.Alias() or "")
+			box:ClearFocus()
+			ns.UI.Refresh()
+		end
 		frame.view = ListView.New(frame, {
 			{ key = "name", title = L.COL_CHARACTER, width = 220, icon = "class", classColor = true, sort = "text" },
 			{ key = "level", title = L.COL_LEVEL, width = 46, align = "RIGHT", muted = true },
 			{ key = "kills", title = L.COL_KILLS, width = 64, align = "RIGHT", sort = "number", format = Theme.Number },
 			{ key = "kb", title = L.COL_KB_SHORT, width = 60, align = "RIGHT", sort = "number", format = Theme.Number },
 			{ key = "deaths", title = L.COL_DEATHS, width = 60, align = "RIGHT", sort = "number", format = Theme.Number },
+			{ key = "useName", title = "", width = 140, button = {
+				text = L.ME_USE_NAME, onClick = UseName,
+				selected = function(data) return data.name == ShownName() end,
+			} },
 		}, { emptyText = L.EMPTY_ME, sortKey = "kills", tooltip = ns.UI.CharacterTooltip })
 		frame.view.panel:SetPoint("TOPLEFT", 0, -56)
 		frame.view.panel:SetPoint("TOPRIGHT", 0, -56)

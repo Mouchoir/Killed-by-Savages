@@ -28,7 +28,9 @@ end
 
 -- Column: { key, title, width, align = "LEFT"|"RIGHT", sort = "number"|"text", icon = "class"|"race",
 --   classColor = true (the row's class) or the row field holding the class file to colour the cell with,
---   tip = a line under the header's name when the mouse rests on it }
+--   tip = a line under the header's name when the mouse rests on it,
+--   button = { text, onClick = fn(data), selected = fn(data) }: an action on the row's item, a dark
+--   button lit and inert on the rows where it is already done }
 -- fill(row, data) is the caller's; rows carry one FontString per column.
 function ListView.New(parent, columns, options)
 	options = options or {}
@@ -115,7 +117,19 @@ function ListView.New(parent, columns, options)
 		row.cells = {}
 		local cx = 6
 		for index, column in ipairs(columns) do
-			if column.icon then
+			if column.button then
+				local button = Theme.DarkButton(row, column.button.text, column.width - 8, ROW - 2)
+				-- A thinner border than the filters': its corners fit the row.
+				Theme.Panel(button, 10, 3, Theme.COLORS.buttonBg, Theme.COLORS.buttonBorder)
+				button:SetPoint("LEFT", cx + 4, 0)
+				button.label:SetFontObject("GameFontHighlightSmall")
+				button:SetScript("OnClick", function()
+					local data = row.data
+					if not data or (column.button.selected and column.button.selected(data)) then return end
+					Util.Guard("list-button", column.button.onClick, data)
+				end)
+				row.cells[index] = { button = button }
+			elseif column.icon then
 				local icon = row:CreateTexture(nil, "ARTWORK")
 				icon:SetSize(16, 16)
 				icon:SetPoint("LEFT", cx + 4, 0)
@@ -135,9 +149,12 @@ function ListView.New(parent, columns, options)
 				text:SetWidth(column.width - 8)
 				row.cells[index] = { text = text }
 			end
-			-- One line per row: a long value is cut, never wrapped over the next row.
-			row.cells[index].text:SetWordWrap(false)
-			row.cells[index].text:SetTextColor(Theme.Color("text"))
+			local text = row.cells[index].text
+			if text then
+				-- One line per row: a long value is cut, never wrapped over the next row.
+				text:SetWordWrap(false)
+				text:SetTextColor(Theme.Color("text"))
+			end
 			cx = cx + column.width
 		end
 		row:SetScript("OnEnter", function(self)
@@ -156,21 +173,25 @@ function ListView.New(parent, columns, options)
 		row.data = data
 		for index, column in ipairs(columns) do
 			local cell = row.cells[index]
-			local value = data[column.key]
-			if column.format then value = column.format(value, data) end
-			cell.text:SetText(value == nil and "" or tostring(value))
-			if column.icon == "class" then
-				Theme.ClassIcon(cell.icon, data.class)
-			elseif column.icon == "race" then
-				Theme.RaceIcon(cell.icon, data.race)
-			end
-			local classFile = column.classColor and data[column.classColor == true and "class" or column.classColor]
-			if type(classFile) == "string" then
-				cell.text:SetTextColor(Theme.ClassColor(classFile))
-			elseif column.muted then
-				cell.text:SetTextColor(Theme.Color("muted"))
+			if cell.button then
+				cell.button:SetSelected(column.button.selected ~= nil and column.button.selected(data) == true)
 			else
-				cell.text:SetTextColor(Theme.Color("text"))
+				local value = data[column.key]
+				if column.format then value = column.format(value, data) end
+				cell.text:SetText(value == nil and "" or tostring(value))
+				if column.icon == "class" then
+					Theme.ClassIcon(cell.icon, data.class)
+				elseif column.icon == "race" then
+					Theme.RaceIcon(cell.icon, data.race)
+				end
+				local classFile = column.classColor and data[column.classColor == true and "class" or column.classColor]
+				if type(classFile) == "string" then
+					cell.text:SetTextColor(Theme.ClassColor(classFile))
+				elseif column.muted then
+					cell.text:SetTextColor(Theme.Color("muted"))
+				else
+					cell.text:SetTextColor(Theme.Color("text"))
+				end
 			end
 		end
 		if data.me then
