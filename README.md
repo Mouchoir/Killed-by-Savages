@@ -59,16 +59,18 @@ and the chain, and are dropped if the author's own count contradicts them.
 
 Options, in the board's Options tab (at the right end of the tab row; the
 game's Settings page for the addon opens it too): minimap button, window
-scale and the kill feed. The kill feed is off by default. Ticked, it opens a
-chat tab of its own named "Kills", docked with the others, where every kill
-and death of the guild in the world reads "X killed Y (2-1)", the score
-being the kills of the one named first on the other against the other's on
-them, in the world. A battleground hides whom a member kills, so its kills
-and deaths give no line: the match gives one when it ends, from its
-scoreboard, "X finished a match in Arathi Basin: 12 kills, 3 killing blows,
-4 deaths". Nothing goes to the main chat, unless the client has no chat
-window to spare. Closing the tab turns the feed off; unticking the feed
-closes its tab.
+scale and the kill feed. The scale applies when the slider is let go. The
+kill feed is off by default. Ticked, every kill and death of the guild in
+the world reads "X killed Y (2-1)" in the chat, the score being the kills
+of the one named first on the other against the other's on them, in the
+world. A battleground hides whom a member kills, so its kills and deaths
+give no line: the match gives one when it ends, from its scoreboard, "X
+finished a match in Arathi Basin: 12 kills, 3 killing blows, 4 deaths".
+The lines go to a chat tab of their own named "Kills", docked with the
+others, or to the main chat when the second box, "In a chat tab of its
+own", is unticked (or the client has no chat window to spare). Closing the
+tab turns the feed off; unticking the feed, or the tab box, closes the tab
+it opened.
 
 A player shows on the players ranking under its display name alone, its
 characters in the tooltip. The name is set in the Me tab: any name, or the

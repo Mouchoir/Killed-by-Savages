@@ -7,11 +7,11 @@ local _, ns = ...
 -- the other's on them in the world, from the member's own journal.
 --
 -- Off by default. Ticked, the lines go to a chat tab named after the feed,
--- opened for it and docked with the others; the main chat only gets them
--- when the client has no chat window to spare. The option is account-wide
--- while chat tabs belong to each character: a character without the tab
--- gets it at login. Closing the tab turns the feed off; unticking the feed
--- closes the tab it opened.
+-- opened for it and docked with the others, or to the main chat when the
+-- second option says so (or the client has no chat window to spare). The
+-- options are account-wide while chat tabs belong to each character: a
+-- character without the tab gets it at login. Closing the tab turns the
+-- feed off; unticking the feed, or the tab, closes the tab it opened.
 --
 -- In Forever's chat code (1.60.1) a closed window keeps its name, hidden
 -- and out of the dock, and a docked tab behind another is hidden but still
@@ -40,6 +40,11 @@ local afterCombat = false        -- the tab opens when the fight ends
 
 local function Settings()
 	return ns.db and ns.db.settings or {}
+end
+
+-- The lines go to the feed's own tab, unless the player chose the main chat.
+local function InTab()
+	return Settings().killfeedTab ~= false
 end
 
 -- This character's own state, which keeps the index of the tab the feed
@@ -295,6 +300,10 @@ local function Feed(guid, seq, record, source)
 	local line = Line(guid, seq, record)
 	if not line then return end
 	ns.Count("killfeed.lines")
+	if not InTab() then
+		ns.Print(line)               -- the main chat is always there
+		return
+	end
 	if not setupDone then
 		Hold(line)                   -- the chat windows are not set up yet
 		return
@@ -310,12 +319,13 @@ local function Feed(guid, seq, record, source)
 end
 
 -- Once per session, after the client set its chat windows up: the tab
--- found or opened when the feed is on. When it is off, the tab it opened
--- here closes (the feed was turned off on another character).
+-- found or opened when the feed is on and goes to it. Otherwise the tab it
+-- opened here closes (the feed, or its tab, was turned off on another
+-- character).
 local function Setup()
 	if setupDone then return end
 	setupDone = true
-	if Settings().killfeed then
+	if Settings().killfeed and InTab() then
 		Open(true)
 	else
 		held = {}
@@ -323,14 +333,39 @@ local function Setup()
 	end
 end
 
--- Ticked: the tab opens now, selected, so the player sees where the lines go.
+-- Ticked: the tab opens now, selected, so the player sees where the lines
+-- go; with the main chat chosen, a line there says so.
 function Killfeed.Enable()
 	Settings().killfeed = true
 	setupDone = true
 	warned = false
+	if not InTab() then
+		ns.Print(L.KILLFEED_ON_MAIN)
+		return nil
+	end
 	local window, why = Open(false)
 	if not window and why == "combat" then ns.Print(L.KILLFEED_AFTER_COMBAT) end
 	return window
+end
+
+-- The second option: the feed's own tab (opened now, selected) or the main
+-- chat (the tab the feed opened closes, the lines that waited for it come
+-- to the main chat).
+function Killfeed.SetTab(value)
+	Settings().killfeedTab = value and true or false
+	if not Settings().killfeed then return end
+	if value then
+		Killfeed.Enable()
+		return
+	end
+	tab = nil
+	afterCombat = false
+	for index = 1, #held do
+		ns.Print(held[index])
+	end
+	held = {}
+	CloseTab()
+	ns.Print(L.KILLFEED_ON_MAIN)
 end
 
 -- Unticked: no more lines, and the tab the feed opened closes.
@@ -360,7 +395,7 @@ end)
 -- After a fight: the tab that had to wait opens, the one to close closes.
 ns.On("PLAYER_REGEN_ENABLED", function()
 	if not setupDone then return end
-	if Settings().killfeed then
+	if Settings().killfeed and InTab() then
 		if afterCombat then Open(true) end
 	else
 		CloseTab()
@@ -369,5 +404,5 @@ end)
 
 -- A tab the player closed with no line since still turns the feed off.
 ns.Hook("Logout", function()
-	if Settings().killfeed and tab and not Valid(tab) then Closed(true) end
+	if Settings().killfeed and InTab() and tab and not Valid(tab) then Closed(true) end
 end)

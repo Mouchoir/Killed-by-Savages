@@ -1349,6 +1349,27 @@ for _, key in ipairs({ "characters", "guild", "hunt", "me", "options" }) do
 	check("the " .. key .. " tab builds and fills", window.tabFrames[key] ~= nil and window.tabFrames[key].shown == true)
 end
 check("the options tab reads the settings", window.tabFrames.options.boxes[1].checked == true and window.tabFrames.options.boxes[2].checked == false)
+local optionsTab = window.tabFrames.options
+check("the feed's tab box sits under the feed: ticked by default, resting while the feed is off",
+	optionsTab.boxes[3].checked == true and optionsTab.boxes[3].enabled == false)
+
+-- The scale: scaling the window moves the slider under the cursor, so while
+-- the thumb is held only the number follows, and the window takes the scale
+-- when the button comes up.
+local slider = optionsTab.slider
+local scaleBefore = A.db().settings.scale
+slider:GetScript("OnMouseDown")(slider, "LeftButton")
+slider:SetValue(1.2)
+check("while the scale slider is held, only its number moves", (window.scale or 1) == scaleBefore
+	and A.db().settings.scale == scaleBefore and optionsTab.scaleValue.text == "120%", optionsTab.scaleValue.text)
+UI.Refresh()
+check("a refresh meanwhile leaves the number alone", optionsTab.scaleValue.text == "120%" and slider.value == 1.2)
+slider:GetScript("OnMouseUp")(slider, "LeftButton")
+check("released, the window takes the new scale", window.scale == 1.2 and A.db().settings.scale == 1.2
+	and optionsTab.scaleValue.text == "120%")
+slider:SetValue(1)
+check("set without the mouse, the scale applies at once", window.scale == 1 and A.db().settings.scale == 1
+	and optionsTab.scaleValue.text == "100%")
 check("the guild feed shows the latest events", #Rows(window.tabFrames.guild.view) > 0 and Rows(window.tabFrames.guild.view)[1].row.data.event ~= nil)
 check("a character's kills from before the addon travel with its profile", (function()
 	for _, row in ipairs(Stats.Characters("all", "all")) do
@@ -1729,6 +1750,54 @@ chatMark = #A.chat
 KillZaljin(A)
 check("unticked, the tab closes and no line goes anywhere", A.db().settings.killfeed == false and FeedWindow(A) == nil
 	and A.db().characters[A.guid].feedTab == nil and not ChatSince(A, chatMark, "Zaljin Darkspear"))
+
+-- The second box says where the lines go: the feed's own tab (ticked by
+-- default) or the main chat. It only matters, and only wakes up, while the
+-- feed is on.
+local function OptionsBox(client, index)
+	client.slash("options")
+	local box = client.env.KilledBySavagesFrame.tabFrames.options.boxes[index]
+	client.slash("")
+	return box
+end
+local function TickTab(client, value)
+	client.slash("options")
+	local box = client.env.KilledBySavagesFrame.tabFrames.options.boxes[3]
+	box:SetChecked(value)
+	box:GetScript("OnClick")(box)
+	client.slash("")
+	advance(1)
+end
+local tabBox = OptionsBox(A, 3)
+local restingR, restingG = A.ns.Theme.Color("disabled")
+check("off, the feed's tab box rests, greyed", tabBox.enabled == false and tabBox.label.color[1] == restingR
+	and tabBox.label.color[2] == restingG)
+Tick(A, true)
+check("ticked, the feed wakes its tab box up at once", tabBox.enabled == true and FeedWindow(A) ~= nil)
+chatMark = #A.chat
+TickTab(A, false)
+KillZaljin(A)
+check("unticked, the tab closes and the lines go to the main chat, said there", FeedWindow(A) == nil
+	and A.db().settings.killfeed == true and A.db().settings.killfeedTab == false
+	and ChatSince(A, chatMark, A.ns.L.KILLFEED_ON_MAIN) and ChatSince(A, chatMark, "Zaljin Darkspear"))
+Relog(A)
+chatMark = #A.chat
+KillZaljin(A)
+check("after a login the lines still go to the main chat, and no tab opens", FeedWindow(A) == nil
+	and ChatSince(A, chatMark, "Zaljin Darkspear"))
+Tick(A, false)
+chatMark = #A.chat
+Tick(A, true)
+check("ticked with the main chat chosen, the feed opens no tab and says so there", FeedWindow(A) == nil
+	and ChatSince(A, chatMark, A.ns.L.KILLFEED_ON_MAIN))
+TickTab(A, true)
+feedTab = FeedWindow(A)
+chatMark = #A.chat
+KillZaljin(A)
+check("ticked again, the tab comes back selected and takes the lines", feedTab ~= nil and A.selected == feedTab.frame
+	and (feedTab.lines[#feedTab.lines] or ""):find("Zaljin Darkspear", 1, true) ~= nil
+	and not ChatSince(A, chatMark, "Zaljin Darkspear"))
+Tick(A, false)
 
 -- Closed with no line before the logout: the feed is off all the same.
 A.ns.Killfeed.Enable()

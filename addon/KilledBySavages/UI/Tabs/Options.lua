@@ -6,24 +6,28 @@ local _, ns = ...
 -- client's own checkboxes and slider, and the help underneath.
 --------------------------------------------------------------------------------
 
+local Util = ns.Util
 local Theme = ns.Theme
 local L = ns.L
 
-local PANEL_HEIGHT = 168
+local PANEL_HEIGHT = 184
 local TOP = 40                    -- first control, under the panel's title
 
 local function Settings()
 	return ns.db.settings
 end
 
+-- The client's checkbox with its label. A long label wraps instead of
+-- ending in an ellipsis: a panel is only half the window wide.
 local function Checkbox(parent, label, get, set)
 	local box = Theme.TryCreate("CheckButton", nil, parent, { "UICheckButtonTemplate", "InterfaceOptionsCheckButtonTemplate" })
 	box:SetSize(26, 26)
 	local text = box:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-	text:SetPoint("LEFT", box, "RIGHT", 4, 0)
+	text:SetPoint("TOPLEFT", box, "TOPRIGHT", 4, -6)
 	text:SetPoint("RIGHT", parent, "RIGHT", -12, 0)
 	text:SetJustifyH("LEFT")
-	text:SetWordWrap(false)
+	text:SetJustifyV("TOP")
+	text:SetWordWrap(true)
 	text:SetTextColor(Theme.Color("text"))
 	text:SetText(label)
 	box.label = text
@@ -34,6 +38,17 @@ local function Checkbox(parent, label, get, set)
 	return box
 end
 
+-- The help under a checkbox, aligned on its label.
+local function Hint(parent, box, text)
+	local hint = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	hint:SetPoint("TOPLEFT", box.label, "BOTTOMLEFT", 0, -3)
+	hint:SetPoint("RIGHT", parent, "RIGHT", -12, 0)
+	hint:SetJustifyH("LEFT")
+	hint:SetTextColor(Theme.Color("muted"))
+	hint:SetText(text)
+	return hint
+end
+
 local function Panel(parent, title)
 	local panel = CreateFrame("Frame", nil, parent, "BackdropTemplate")
 	Theme.Panel(panel, 14, 4)
@@ -41,6 +56,10 @@ local function Panel(parent, title)
 	local divider = Theme.Divider(panel, title, 220)
 	divider:SetPoint("TOP", 0, -12)
 	return panel
+end
+
+local function Percent(value)
+	return ("%d%%"):format(value * 100 + 0.5)
 end
 
 ns.UI.RegisterTab({
@@ -76,28 +95,60 @@ ns.UI.RegisterTab({
 		local scaleValue = window:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 		scaleValue:SetPoint("LEFT", slider, "RIGHT", 12, 0)
 		scaleValue:SetTextColor(Theme.Color("text"))
-		slider:SetScript("OnValueChanged", function(_, value)
-			local applied = ns.UI.SetScale(value)
-			scaleValue:SetText(("%d%%"):format(applied * 100 + 0.5))
+		-- Scaling the window moves the slider under the cursor: while the
+		-- mouse button is down only the number follows, and the window takes
+		-- the new scale when the button comes up.
+		local function Apply(value)
+			scaleValue:SetText(Percent(ns.UI.SetScale(value)))
+		end
+		local function Release(self)
+			if not self.held then return end
+			self.held = false
+			self:SetScript("OnUpdate", nil)
+			Apply(self:GetValue())
+		end
+		slider:SetScript("OnValueChanged", function(self, value)
+			if self.held then
+				scaleValue:SetText(Percent(value))
+			else
+				Apply(value)
+			end
 		end)
+		slider:SetScript("OnMouseDown", function(self)
+			self.held = true
+			-- The button may come up away from the slider: watch it.
+			self:SetScript("OnUpdate", function(watched)
+				if Util.Fn(IsMouseButtonDown) and not IsMouseButtonDown("LeftButton") then Release(watched) end
+			end)
+		end)
+		slider:SetScript("OnMouseUp", Release)
+		slider:SetScript("OnHide", Release)
 		if slider.Low then slider.Low:SetText("60%") end
 		if slider.High then slider.High:SetText("140%") end
 		frame.slider, frame.scaleValue = slider, scaleValue
 
-		-- The chat: the kill feed, off by default, in a tab of its own when on.
+		-- The chat: the kill feed, off by default; when on, in a tab of its
+		-- own unless the box under it sends the lines to the main chat.
 		local killfeed = Checkbox(chat, L.OPTIONS_KILLFEED,
 			function() return Settings().killfeed end,
 			function(value)
 				if value then ns.Killfeed.Enable() else ns.Killfeed.Disable() end
+				frame.UpdateFeedTab()
 			end)
 		killfeed:SetPoint("TOPLEFT", 12, -TOP)
-		local hint = chat:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-		hint:SetPoint("TOPLEFT", killfeed, "BOTTOMLEFT", 30, -2)
-		hint:SetPoint("RIGHT", chat, "RIGHT", -12, 0)
-		hint:SetJustifyH("LEFT")
-		hint:SetTextColor(Theme.Color("muted"))
-		hint:SetText(L.OPTIONS_KILLFEED_HINT:format(L.KILLFEED_TAB))
-		frame.boxes = { minimap, killfeed }
+		local hint = Hint(chat, killfeed, L.OPTIONS_KILLFEED_HINT)
+		-- Where the lines go: under the feed, indented, and only while it is on.
+		local feedTab = Checkbox(chat, L.OPTIONS_KILLFEED_TAB:format(L.KILLFEED_TAB),
+			function() return Settings().killfeedTab ~= false end,
+			function(value) ns.Killfeed.SetTab(value) end)
+		feedTab:SetPoint("TOPLEFT", hint, "BOTTOMLEFT", -4, -8)
+		Hint(chat, feedTab, L.OPTIONS_KILLFEED_TAB_HINT)
+		function frame.UpdateFeedTab()
+			local on = Settings().killfeed == true
+			feedTab:SetEnabled(on)
+			feedTab.label:SetTextColor(Theme.Color(on and "text" or "disabled"))
+		end
+		frame.boxes = { minimap, killfeed, feedTab }
 
 		local help = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 		help:SetPoint("TOPLEFT", window, "BOTTOMLEFT", 4, -14)
@@ -114,8 +165,12 @@ ns.UI.RegisterTab({
 		for _, box in ipairs(frame.boxes) do
 			box:SetChecked(box.get() and true or false)
 		end
-		local scale = tonumber(Settings().scale) or 1
-		frame.slider:SetValue(scale)
-		frame.scaleValue:SetText(("%d%%"):format(scale * 100 + 0.5))
+		frame.UpdateFeedTab()
+		-- A refresh while the thumb is held leaves the number it shows.
+		if not frame.slider.held then
+			local scale = tonumber(Settings().scale) or 1
+			frame.slider:SetValue(scale)
+			frame.scaleValue:SetText(Percent(scale))
+		end
 	end,
 })

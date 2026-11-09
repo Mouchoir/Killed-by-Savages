@@ -316,7 +316,16 @@ local function NewFrame(client, kind, name)
 	function methods.GetID(self) return self.id or 0 end
 	function methods.GetPoint() return nil end
 	function methods.GetValue(self) return self.value or 1 end
-	function methods.SetValue(self, value) self.value = value end
+	function methods.SetValue(self, value)
+		local before = self.value
+		self.value = value
+		-- A slider hears of every change of its value, dragged or not (userInput false).
+		if self.kind == "Slider" and value ~= before and self.scripts.OnValueChanged then
+			self.scripts.OnValueChanged(self, value, false)
+		end
+	end
+	function methods.SetScale(self, scale) self.scale = scale end
+	function methods.GetScale(self) return self.scale or 1 end
 	function methods.GetChecked(self) return self.checked == true end
 	function methods.SetChecked(self, checked) self.checked = checked end
 	function methods.HasFocus() return false end

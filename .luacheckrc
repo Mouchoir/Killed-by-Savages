@@ -11,7 +11,7 @@ read_globals = {
 	"CreateFrame", "C_Timer", "GetTime", "GetServerTime", "GetLocale", "GetBuildInfo", "WOW_PROJECT_ID",
 	"UIParent", "UISpecialFrames", "DEFAULT_CHAT_FRAME", "ChatFontNormal", "GameFontHighlightSmall",
 	"Enum", "C_RestrictedActions", "C_Secrets", "C_DateAndTime", "C_AddOns", "GetAddOnMetadata",
-	"LibStub", "InCombatLockdown", "PlaySound", "SOUNDKIT", "GameTooltip", "CreateColor",
+	"LibStub", "InCombatLockdown", "PlaySound", "SOUNDKIT", "GameTooltip", "CreateColor", "IsMouseButtonDown",
 	"C_Texture", "C_XMLUtil", "C_ClassColor", "RAID_CLASS_COLORS", "NineSliceUtil",
 	"ScrollUtil", "CreateScrollBoxListLinearView", "CreateDataProvider", "ScrollBoxConstants",
 	"PanelTemplates_SelectTab", "PanelTemplates_DeselectTab", "PanelTemplates_SetNumTabs", "PanelTemplates_TabResize",

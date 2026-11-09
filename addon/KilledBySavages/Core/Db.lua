@@ -18,7 +18,8 @@ local ERROR_CAP = 50
 
 local DEFAULT_SETTINGS = {
 	minimap = { hide = false },
-	killfeed = false,                     -- kill lines in a chat tab of their own, off by default
+	killfeed = false,                     -- the guild's kill lines in the chat, off by default
+	killfeedTab = true,                   -- in a chat tab of their own, else the main chat
 	scale = 1,
 	window = {},
 	verbose = false,
