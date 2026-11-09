@@ -1,9 +1,10 @@
 local _, ns = ...
 
 --------------------------------------------------------------------------------
--- Kill feed: one line per kill or death of the guild, "X killed Y (2-1)", in
--- a chat tab of its own. The score is the kills of the one named first on
--- the other against the other's on them, from the member's own journal.
+-- Kill feed: one line per kill or death of the guild in the world, "X
+-- killed Y (2-1)", and one per battleground match, in a chat tab of its
+-- own. The score is the kills of the one named first on the other against
+-- the other's on them in the world, from the member's own journal.
 --
 -- Off by default. Ticked, the lines go to a chat tab named after the feed,
 -- opened for it and docked with the others; the main chat only gets them
@@ -209,7 +210,8 @@ local function Target()
 	return Open(true)
 end
 
--- Kills of the member on the enemy, and the enemy's on the member.
+-- Kills of the member on the enemy, and the enemy's on the member, in the
+-- world (see Stats).
 local function Score(agg, tail)
 	if not tail then return nil end
 	local kills = agg.victims[tail] and agg.victims[tail].count or 0
@@ -231,15 +233,41 @@ local function Sentence(first, second, mine, theirs, zone)
 	return L.KILLFEED_KILL_BARE:format(first, second)
 end
 
--- The line for a kill or death of a member, or nil when the record says
--- nothing worth one: a battleground HK names nobody, its match is on the
--- board.
+-- "1 death", "9 deaths".
+local function Amount(count, one, many)
+	return (count == 1 and one or many):format(count)
+end
+
+-- The end of a battleground match: the member's row of the scoreboard. A
+-- match left before its scoreboard was read only knows the HKs the
+-- counter moved by. A scoreboard written by hand for a guild raid in the
+-- world (instance 0) is no match.
+local function MatchLine(member, record)
+	if record.backfill or record.instanceID == 0 then return nil end
+	local zone = Theme.ZoneName(record.mapID)
+	local kills = Amount(record.hk or 0, L.KILLFEED_ONE_KILL, L.KILLFEED_N_KILLS)
+	if (record.kb or 0) == 0 and (record.deaths or 0) == 0 and (record.honor or 0) == 0 then
+		return zone and L.KILLFEED_MATCH_LEFT:format(member, zone, kills) or L.KILLFEED_MATCH_LEFT_NOZONE:format(member, kills)
+	end
+	local blows = Amount(record.kb or 0, L.KILLFEED_ONE_BLOW, L.KILLFEED_N_BLOWS)
+	local deaths = Amount(record.deaths or 0, L.KILLFEED_ONE_DEATH, L.KILLFEED_N_DEATHS)
+	if zone then return L.KILLFEED_MATCH:format(member, zone, kills, blows, deaths) end
+	return L.KILLFEED_MATCH_NOZONE:format(member, kills, blows, deaths)
+end
+
+-- The line for a record of a member, or nil when it says nothing worth
+-- one. A battleground hides whom a member kills while a death there names
+-- the killer: line by line the feed would show the member only dying, with
+-- scores blind to the kills of the match, and all at once when the match
+-- ends, since nothing leaves a battleground before. So its kills and
+-- deaths give no line, and the match gives one, from its scoreboard.
 local function Line(guid, record)
-	if record.type ~= "K" and record.type ~= "D" then return nil end
-	if record.type == "K" and record.bucket == "b" then return nil end
+	if record.type ~= "K" and record.type ~= "D" and record.type ~= "M" then return nil end
+	if record.type ~= "M" and record.bucket == "b" then return nil end
 	local info = Stats.AuthorInfo(guid)
-	local agg = Stats.AuthorAggregate(guid)
 	local member = Coloured(info.name, info.class)
+	if record.type == "M" then return MatchLine(member, record) end
+	local agg = Stats.AuthorAggregate(guid)
 	local zone = Theme.ZoneName(record.mapID) or record.sub
 	if record.type == "K" then
 		if not record.vname then

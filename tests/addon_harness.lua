@@ -1242,10 +1242,16 @@ Mc.login()
 advance(1)
 Mc.ns.Sync.State().holders[lTail] = { ["brenna ironvale"] = { head = 2, count = 2, at = Mock.Server() } }
 Mc.ns.Sync.Schedule()
-advance(60)
+-- Checked before Mc's hello: the members who answer it may name Brenna
+-- again, and a holder that announces again gets another chance.
+advance(4)
 check("a page that breaks the chain is refused and its holder set aside", Mc.counter("sync.pageChainBroken") == 1
 	and Mc.db().debug.lastChainBreak and Mc.db().debug.lastChainBreak.seq == 2 and #Mc.db().debug.lastChainBreak.around == 2,
 	Mc.counter("sync.pageChainBroken"))
+-- Another holder announces a sound copy. Left to the answers to Mc's
+-- hello, Brenna may answer first and the others then stay quiet.
+Mc.fire("CHAT_MSG_ADDON", "KBS", "A^" .. lTail .. "=2/2", "GUILD", "Aldric Stormhand")
+advance(56)
 Mc.fire("GUILD_ROSTER_UPDATE")
 advance(120)
 check("the journal comes from another holder and nothing errored", Held(Mc, Lc) == 2 and Mc.ns.Records.Get(Lc.guid, 2).lifeHK == 13
@@ -1485,6 +1491,72 @@ A.ns.Records.AppendOwn({ type = "K", t = Mock.Server(), bucket = "b", how = "bg"
 advance(1)
 check("a battleground HK is not a feed line", #feedTab.lines == before)
 
+-- A battleground hides whom a member kills: its deaths give no line either,
+-- and the match gives one at its end, from the scoreboard. The score of a
+-- line counts the world only.
+local function BattlegroundFeed()
+	local L = A.ns.L
+	local function LastLine() return feedTab.lines[#feedTab.lines] or "" end
+	local function Has(line, needle) return line:find(needle, 1, true) ~= nil end
+	local agg = A.ns.Stats.AuthorAggregate(A.guid)
+	local gruksBefore = agg.killers[gruk] and agg.killers[gruk].count or 0
+	advance(5)
+	before = #feedTab.lines
+	A.ns.Records.AppendOwn({ type = "D", t = Mock.Server(), bucket = "b", ktail = gruk, kname = "Gruk Bonecrusher", kclass = "WARRIOR",
+		krace = "Orc", kkind = "p", spell = "Frappe mortelle", sub = "Pic de Dun Baldar", lifeHK = A.state.lifetime })
+	advance(1)
+	A.ns.Fire("RecordStored", B.guid, 1, { type = "D", seq = 1, t = Mock.Server(), bucket = "b", ktail = gruk,
+		kname = "Gruk Bonecrusher", kclass = "WARRIOR", krace = "Orc", kkind = "p", sub = "Pic de Dun Baldar" }, "")
+	advance(1)
+	check("a battleground death is no feed line either, mine or a guildmate's", #feedTab.lines == before)
+
+	A.state.lifetime = A.state.lifetime + 2
+	A.ns.Records.AppendOwn({ type = "M", t = Mock.Server(), instanceID = 30, duration = 900, winner = 1, hk = 3, kb = 1, deaths = 2,
+		honor = 120, lifeHK = A.state.lifetime, live = 1, mapID = 1459, lines = {} })
+	advance(1)
+	local line = LastLine()
+	check("the match gives one line at its end, with my kills, killing blows and deaths", #feedTab.lines == before + 1
+		and Has(line, "Aldric Stormhand") and Has(line, L.KILLFEED_N_KILLS:format(3)) and Has(line, L.KILLFEED_ONE_BLOW:format(1))
+		and not Has(line, L.KILLFEED_N_BLOWS:format(1)) and Has(line, L.KILLFEED_N_DEATHS:format(2)), line)
+
+	before = #feedTab.lines
+	A.ns.Fire("RecordStored", B.guid, 2, { type = "M", seq = 2, t = Mock.Server(), instanceID = 30, winner = 1, hk = 5, kb = 0,
+		deaths = 1, honor = 90, live = 5, mapID = 1459, lines = {} }, "")
+	advance(1)
+	line = LastLine()
+	check("a guildmate's match too, with its own numbers", #feedTab.lines == before + 1 and Has(line, "Brenna Ironvale")
+		and Has(line, L.KILLFEED_N_KILLS:format(5)) and Has(line, L.KILLFEED_ONE_DEATH:format(1)), line)
+
+	-- Left before the scoreboard was read: the record only has the HKs
+	-- the counter moved by.
+	before = #feedTab.lines
+	A.ns.Fire("RecordStored", B.guid, 3, { type = "M", seq = 3, t = Mock.Server(), instanceID = 30, hk = 4, kb = 0, deaths = 0,
+		honor = 0, live = 4, mapID = 1459, lines = {} }, "")
+	advance(1)
+	line = LastLine()
+	check("a match left before its scoreboard gives its kills only", #feedTab.lines == before + 1 and Has(line, "Brenna Ironvale")
+		and Has(line, L.KILLFEED_N_KILLS:format(4)) and not Has(line, L.KILLFEED_N_BLOWS:format(0))
+		and not Has(line, L.KILLFEED_N_DEATHS:format(0)), line)
+
+	before = #feedTab.lines
+	A.ns.Fire("RecordStored", B.guid, 4, { type = "M", seq = 4, t = Mock.Server(), instanceID = 0, hk = 0, kb = 0, deaths = 0,
+		honor = 0, live = 0, lines = {} }, "")
+	advance(1)
+	check("a scoreboard written by hand for a world raid gives no line", #feedTab.lines == before)
+
+	-- Gruk's kill on me in the battleground stays out of the score.
+	advance(5)
+	before = #feedTab.lines
+	A.ns.Records.AppendOwn({ type = "D", t = Mock.Server(), bucket = "w", ktail = gruk, kname = "Gruk Bonecrusher", kclass = "WARRIOR",
+		krace = "Orc", kkind = "p", spell = "Frappe mortelle", mapID = 1424, x = 0.4, y = 0.5, lifeHK = A.state.lifetime })
+	advance(1)
+	agg = A.ns.Stats.AuthorAggregate(A.guid)
+	local score = ("(%d-%d)"):format(gruksBefore + 1, agg.victims[gruk] and agg.victims[gruk].count or 0)
+	line = LastLine()
+	check("the score of a line counts the world only", #feedTab.lines == before + 1 and Has(line, score), line)
+end
+BattlegroundFeed()
+
 -- The tab outlives a login: found again, not opened twice, and the tab the
 -- player reads stays selected.
 before = #feedTab.lines
@@ -1697,7 +1769,7 @@ for _, client in ipairs(Mock.clients) do
 		check(client.name .. ": SavedVariables clean", okSave, message)
 	end
 end
-check("the saved data stays small", #Serialize(A.db()) < 22000, #Serialize(A.db()))
+check("the saved data stays small", #Serialize(A.db()) < 23000, #Serialize(A.db()))
 check("records are stored as strings, not tables", (function()
 	for _, entry in pairs(A.db().authors[Guid(1)].log) do
 		if type(entry) ~= "string" then return false end

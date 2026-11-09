@@ -61,11 +61,14 @@ Options, in the board's Options tab (at the right end of the tab row; the
 game's Settings page for the addon opens it too): minimap button, window
 scale and the kill feed. The kill feed is off by default. Ticked, it opens a
 chat tab of its own named "Kills", docked with the others, where every kill
-and death of the guild reads "X killed Y (2-1)", the score being the kills
-of the one named first on the other against the other's on them. Nothing
-goes to the main chat, unless the client has no chat window to spare.
-Closing the tab turns the feed off; unticking the feed closes its tab. The
-display name of a player is set in the Me tab.
+and death of the guild in the world reads "X killed Y (2-1)", the score
+being the kills of the one named first on the other against the other's on
+them, in the world. A battleground hides whom a member kills, so its kills
+and deaths give no line: the match gives one when it ends, from its
+scoreboard, "X finished a match in Arathi Basin: 12 kills, 3 killing blows,
+4 deaths". Nothing goes to the main chat, unless the client has no chat
+window to spare. Closing the tab turns the feed off; unticking the feed
+closes its tab. The display name of a player is set in the Me tab.
 
 The window's footer says where the sync with the guild stands: the seconds
 before the login announcement, the pages coming in, or how many journals are

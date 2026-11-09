@@ -91,7 +91,8 @@ local function IsKillingBlow(record)
 end
 
 -- Everything one journal says, by week and bucket, plus the lists the
--- hunting board and the feed need.
+-- hunting board and the feed need. victims and killers hold the score
+-- between the author and each enemy, in the world.
 local function Aggregate(guid)
 	local author = ns.db.authors[guid]
 	local agg = { weeks = {}, kills = {}, deaths = {}, victims = {}, killers = {}, provisional = 0, records = 0, backfilled = 0, repeated = 0 }
@@ -126,7 +127,10 @@ local function Aggregate(guid)
 				lifeKs[#lifeKs + 1] = record.lifeHK
 			end
 			agg.kills[#agg.kills + 1] = { seq = seq, record = record, provisional = provisional }
-			if record.vtail then
+			-- The score between a member and an enemy counts the world only:
+			-- a battleground hides whom the member kills there, so the
+			-- deaths there stay out of it too (below).
+			if record.vtail and record.bucket ~= "b" then
 				local victim = agg.victims[record.vtail]
 				if not victim then
 					victim = { tail = record.vtail, count = 0, kb = 0 }
@@ -148,7 +152,7 @@ local function Aggregate(guid)
 			else
 				if record.bucket ~= "b" then Bump(weekly, record.bucket, "deaths") end
 				agg.deaths[#agg.deaths + 1] = { seq = seq, record = record, provisional = provisional }
-				if key then
+				if key and record.bucket ~= "b" then
 					local killer = agg.killers[key]
 					if not killer then
 						killer = { key = key, tail = record.ktail, kind = record.kkind, count = 0 }

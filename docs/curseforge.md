@@ -34,10 +34,11 @@ offline.
 
 **Kill feed.** Off by default. Tick it in the Options tab and a chat tab
 named "Kills" docks with your other chat tabs. Every kill and death of the
-guild lands there as "X killed Y (2-1)": the score counts, between that
-member and that enemy, the kills of the one named first against the
-other's. Nothing goes to your main chat. Close the tab and the feed turns
-off.
+guild in the world lands there as "X killed Y (2-1)": the score counts,
+between that member and that enemy, the kills of the one named first
+against the other's. A battleground match gives one line when it ends,
+with the member's kills, killing blows and deaths. Nothing goes to your
+main chat. Close the tab and the feed turns off.
 
 **Updates.** When a guildmate runs a newer version of the addon, you are
 told once in the chat.
@@ -80,8 +81,9 @@ viennent du récapitulatif de mort ; en champ de bataille c'est le tableau de
 score final qui compte, pour tous les coéquipiers de guilde. Un onglet
 Options, au bout de la rangée d'onglets, règle le bouton de minicarte,
 l'échelle et le fil des kills. Désactivé par défaut, ce fil ouvre une fois
-coché un onglet de chat dédié où chaque kill et chaque mort de la guilde
-s'affiche avec le score entre le membre et l'ennemi, sans rien écrire dans
-le chat principal. Quand un membre de la guilde a une version plus récente
-de l'addon, un message dans le chat le signale. Rien ne sort du jeu : les
+coché un onglet de chat dédié où chaque kill et chaque mort de la guilde en
+monde ouvert s'affiche avec le score entre le membre et l'ennemi, et chaque
+match de champ de bataille en une ligne à sa fin, sans rien écrire dans le
+chat principal. Quand un membre de la guilde a une version plus récente de
+l'addon, un message dans le chat le signale. Rien ne sort du jeu : les
 données circulent entre membres par messages d'addon cachés.
