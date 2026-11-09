@@ -13,7 +13,7 @@ local L = ns.L
 local Minimap = {}
 ns.MinimapButton = Minimap
 
-local ICON = "Interface\\Icons\\Ability_Warrior_Rampage"
+local ICON = "Interface\\AddOns\\KilledBySavages\\Media\\Logo"
 
 local function Register()
 	if not LibStub then return end

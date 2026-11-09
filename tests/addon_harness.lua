@@ -1418,6 +1418,31 @@ A.login()
 advance(5)
 check("the window remembers its tab and filters", A.db().settings.tab == "players" and A.db().settings.period == "all" and A.db().settings.bucket == "all")
 check("the minimap button registered", A.ns.MinimapButton.registered == true)
+
+-- The icon is the guild's logo, drawn by scripts\make-icon.ps1: a 32-bit
+-- TGA the game loads, a disc on transparent corners.
+local function LogoIcon()
+	local backslash = string.char(92)
+	local object = A.env.LibStub("LibDataBroker-1.1"):GetDataObjectByName("KilledBySavages")
+	local toc = io.open("addon/KilledBySavages/KilledBySavages.toc", "rb")
+	local tocText = toc and toc:read("*a") or ""
+	if toc then toc:close() end
+	local tocIcon = tocText:match("## IconTexture: ([^\r\n]+)")
+	local prefix = table.concat({ "Interface", "AddOns", "KilledBySavages", "" }, backslash)
+	local icon = object and object.icon or ""
+	local file = icon:sub(1, #prefix) == prefix and ("addon/KilledBySavages/" .. icon:sub(#prefix + 1):gsub(backslash, "/") .. ".tga") or nil
+	check("the minimap button and the addon list show the guild's logo", file ~= nil and tocIcon == icon, icon)
+	local tga = file and io.open(file, "rb")
+	local data = tga and tga:read("*a") or ""
+	if tga then tga:close() end
+	local width = (data:byte(13) or 0) + (data:byte(14) or 0) * 256
+	local height = (data:byte(15) or 0) + (data:byte(16) or 0) * 256
+	local function Alpha(x, y) return data:byte(18 + (y * width + x) * 4 + 4) end
+	check("the logo is a 64 px 32-bit TGA, a disc on transparent corners", data:byte(3) == 2 and width == 64 and height == 64
+		and data:byte(17) == 32 and data:byte(18) == 8 and #data == 18 + 64 * 64 * 4 and Alpha(0, 0) == 0 and Alpha(63, 63) == 0
+		and Alpha(32, 32) == 255, #data)
+end
+LogoIcon()
 A.slash("options")
 check("/kbs options opens the board on its options tab", A.env.KilledBySavagesFrame.shown == true and A.ns.UI.State().tab == "options"
 	and A.env.KilledBySavagesFrame.tabFrames.options ~= nil and A.env.KilledBySavagesFrame.tabFrames.options.shown == true)

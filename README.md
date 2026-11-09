@@ -148,6 +148,9 @@ the kinds it knows.
   TOC says `X.Y.Z-dev`, so the guild is never told of a version that is not
   out; once the release tag is pushed, `-Release` deploys the build as
   published. A `/reload` in game loads it.
+- Icon: `scripts\make-icon.ps1` draws `Media\Logo.tga`, the icon of the
+  minimap button and of the addon list, from `art\savages-logo.svg`, the
+  guild's logo: a disc with the claws, 64 px, a 32-bit TGA with alpha.
 - Package: `scripts\package-addon.ps1` writes `dist\KilledBySavages-<version>.zip`.
   Pushing a tag `vX.Y.Z` runs `.github/workflows/publish.yml`: it builds the
   zip from the tag, creates the GitHub release with the zip (Wago Addons
