@@ -92,10 +92,14 @@ end
 
 -- Everything one journal says, by week and bucket, plus the lists the
 -- hunting board and the feed need. victims and killers hold the score
--- between the author and each enemy, in the world.
+-- between the author and each enemy, in the world; repeats holds the seq
+-- of the death records that only repeat the death before them.
 local function Aggregate(guid)
 	local author = ns.db.authors[guid]
-	local agg = { weeks = {}, kills = {}, deaths = {}, victims = {}, killers = {}, provisional = 0, records = 0, backfilled = 0, repeated = 0 }
+	local agg = {
+		weeks = {}, kills = {}, deaths = {}, victims = {}, killers = {}, repeats = {},
+		provisional = 0, records = 0, backfilled = 0, repeated = 0,
+	}
 	if not author then return agg end
 	local lifeKs = {}
 	local counters = {}
@@ -146,9 +150,11 @@ local function Aggregate(guid)
 		elseif record.type == "D" then
 			local key = record.ktail or (record.kname and ("pet:" .. record.kname)) or nil
 			-- The client fires PLAYER_DEAD twice at times; a journal written
-			-- before 0.1.13 can hold the same death twice in a row. Once.
+			-- before 0.1.13 can hold the same death twice in a row. Once,
+			-- and the feed skips the copy too.
 			if lastDeath and key and key == lastDeath.key and record.t - lastDeath.t <= REPEAT_WINDOW then
 				agg.repeated = agg.repeated + 1
+				agg.repeats[seq] = true
 			else
 				if record.bucket ~= "b" then Bump(weekly, record.bucket, "deaths") end
 				agg.deaths[#agg.deaths + 1] = { seq = seq, record = record, provisional = provisional }

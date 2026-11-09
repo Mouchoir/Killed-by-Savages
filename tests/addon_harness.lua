@@ -1642,6 +1642,57 @@ local function BattlegroundFeed()
 end
 BattlegroundFeed()
 
+-- A member on a version before 0.1.13 writes some deaths twice in the same
+-- second (the client fires PLAYER_DEAD twice): the board counts the death
+-- once, and the feed gives it one line. A death a while later is a line
+-- again, its score one up.
+local function RepeatedDeathFeed()
+	if not B.online then
+		B.login()
+		advance(20)
+	end
+	local function Death()
+		return { type = "D", t = Mock.Server(), bucket = "w", ktail = gruk, kname = "Gruk Bonecrusher", kclass = "WARRIOR",
+			krace = "Orc", kkind = "p", spell = "Frappe mortelle", mapID = 1424, x = 0.4, y = 0.5, lifeHK = B.state.lifetime }
+	end
+	local function Lines(from)
+		local hits = {}
+		for index = from + 1, #feedTab.lines do
+			local line = feedTab.lines[index]
+			if line:find("Gruk Bonecrusher", 1, true) and line:find("Brenna Ironvale", 1, true) then hits[#hits + 1] = line end
+		end
+		return hits
+	end
+	local function Deaths()
+		local agg = A.ns.Stats.AuthorAggregate(B.guid)
+		return agg.killers[gruk] and agg.killers[gruk].count or 0
+	end
+	local function Score(deaths)
+		local agg = A.ns.Stats.AuthorAggregate(B.guid)
+		return ("(%d-%d)"):format(deaths, agg.victims[gruk] and agg.victims[gruk].count or 0)
+	end
+	advance(5)
+	local deathsBefore = Deaths()
+	local start = #feedTab.lines
+	local first = B.ns.Records.AppendOwn(Death())
+	local second = B.ns.Records.AppendOwn(Death())
+	advance(6)
+	local lines = Lines(start)
+	check("both copies of a death written twice reach the guild", first ~= nil and second ~= nil
+		and A.ns.Records.Get(B.guid, first) ~= nil and A.ns.Records.Get(B.guid, second) ~= nil, tostring(first) .. " " .. tostring(second))
+	check("a death a guildmate's old version wrote twice gives one feed line, counted once", #lines == 1
+		and Deaths() == deathsBefore + 1 and lines[1]:find(Score(deathsBefore + 1), 1, true) ~= nil,
+		#lines .. ": " .. table.concat(lines, " | "))
+	advance(10)
+	start = #feedTab.lines
+	B.ns.Records.AppendOwn(Death())
+	advance(4)
+	lines = Lines(start)
+	check("a death a while later is a line again, its score one up", #lines == 1
+		and lines[1]:find(Score(deathsBefore + 2), 1, true) ~= nil, #lines .. ": " .. table.concat(lines, " | "))
+end
+RepeatedDeathFeed()
+
 -- The tab outlives a login: found again, not opened twice, and the tab the
 -- player reads stays selected.
 before = #feedTab.lines

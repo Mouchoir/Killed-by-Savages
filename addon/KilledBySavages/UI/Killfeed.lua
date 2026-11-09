@@ -261,7 +261,7 @@ end
 -- scores blind to the kills of the match, and all at once when the match
 -- ends, since nothing leaves a battleground before. So its kills and
 -- deaths give no line, and the match gives one, from its scoreboard.
-local function Line(guid, record)
+local function Line(guid, seq, record)
 	if record.type ~= "K" and record.type ~= "D" and record.type ~= "M" then return nil end
 	if record.type ~= "M" and record.bucket == "b" then return nil end
 	local info = Stats.AuthorInfo(guid)
@@ -276,6 +276,9 @@ local function Line(guid, record)
 		local kills, deaths = Score(agg, record.vtail)
 		return Sentence(member, Coloured(record.vname, record.vclass), kills, deaths, zone)
 	end
+	-- A version before 0.1.13 writes some deaths twice: the board counts the
+	-- copy once, the feed gives it no line of its own.
+	if seq and agg.repeats[seq] then return nil end
 	local enemy
 	if record.kkind == "p" then
 		enemy = Coloured(record.kname or "?", record.kclass)
@@ -287,9 +290,9 @@ local function Line(guid, record)
 	return Sentence(enemy, member, deaths, kills, zone)
 end
 
-local function Feed(guid, record, source)
+local function Feed(guid, seq, record, source)
 	if not Settings().killfeed or source ~= nil or type(record) ~= "table" then return end
-	local line = Line(guid, record)
+	local line = Line(guid, seq, record)
 	if not line then return end
 	ns.Count("killfeed.lines")
 	if not setupDone then
@@ -339,8 +342,8 @@ function Killfeed.Disable()
 	CloseTab()
 end
 
-ns.Hook("RecordStored", function(guid, _, record) Feed(guid, record) end)
-ns.Hook("RecordAdded", function(guid, _, _, record, source) Feed(guid, record, source) end)
+ns.Hook("RecordStored", function(guid, seq, record) Feed(guid, seq, record) end)
+ns.Hook("RecordAdded", function(guid, seq, _, record, source) Feed(guid, seq, record, source) end)
 
 ns.On("UPDATE_CHAT_WINDOWS", function()
 	if chatReady then return end
