@@ -78,15 +78,24 @@ name of one of its characters with the button next to it.
 
 The window's footer says where the sync with the guild stands: the seconds
 before the login announcement, the pages coming in, or how many journals are
-held and how many members with the addon are around. `/kbs status` prints
-the same line. A member who held nothing of the guild is told once in chat
-when the first journals arrive.
+held and how many members with the addon are online (the guild roster's
+online members whose addon we know of). `/kbs status` prints the same line.
+A member who held nothing of the guild is told once in chat when the first
+journals arrive.
 
 A member who runs an older version than a guildmate is told once per
 session in the chat: "A new version (0.1.16) is available. Please update!".
 Hellos and profiles carry the version; a member who logs in with an older
 one gets the newer one back from a member who runs it, and the profiles it
-holds tell it at login when nobody newer is online. Builds deployed by
+holds tell it at login when nobody newer is online. The login after an
+update says hello however recent the last one, and from 1.0.0 every client
+also tells the guild its version every 10 minutes (a presence message),
+for members who logged in after its hello. The footer's right end then
+reads "6 players have an outdated addon" when some guild members run an
+older version than the newest release around: hover the dotted number for
+their names, versions and when each was last heard from. A player counts
+once, judged by the character heard from last, so it drops off as soon as
+any of its characters runs the new version. Builds deployed by
 `scripts\dev.ps1` say `X.Y.Z-dev` and are never announced.
 
 ## Import from the probe
@@ -122,7 +131,9 @@ your kill and death records (time, the victim's or killer's name, class,
 race and level, the map position, your lifetime honorable kill count), the
 scoreboard rows of your battlegrounds, and your profile (character name,
 class, race, realm, level, the salted BattleTag hash, your display name, the
-addon version). There is no server; the guild's members hold the data.
+addon version), the version and the BattleTag hash again in the presence
+message every 10 minutes. There is no server; the guild's members hold the
+data.
 
 ## Install
 

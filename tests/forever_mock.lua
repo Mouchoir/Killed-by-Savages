@@ -324,6 +324,16 @@ local function NewFrame(client, kind, name)
 			self.scripts.OnValueChanged(self, value, false)
 		end
 	end
+	-- Tooltip lines, kept as text ("left | right" for a double line).
+	function methods.ClearLines(self) self.tooltipLines = {} end
+	function methods.AddLine(self, text)
+		self.tooltipLines = self.tooltipLines or {}
+		self.tooltipLines[#self.tooltipLines + 1] = tostring(text)
+	end
+	function methods.AddDoubleLine(self, left, right)
+		self.tooltipLines = self.tooltipLines or {}
+		self.tooltipLines[#self.tooltipLines + 1] = tostring(left) .. " | " .. tostring(right)
+	end
 	function methods.SetScale(self, scale) self.scale = scale end
 	function methods.GetScale(self) return self.scale or 1 end
 	function methods.GetChecked(self) return self.checked == true end

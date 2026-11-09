@@ -73,11 +73,67 @@ function UI.SyncText(status)
 	return L.SYNC_IDLE:format(status.held or 0, status.peers or 0)
 end
 
+-- The players on an older addon than the newest release, on hover of the
+-- notice: name, version, and online or when last heard from.
+local function ShowOutdated(self)
+	local data = self.data
+	if not data or #data.players == 0 then return end
+	if not Theme.TooltipStart(self, L.OUTDATED_TITLE:format(data.newest or "?")) then return end
+	local silent = false
+	for _, player in ipairs(data.players) do
+		local when = player.online and L.OUTDATED_ONLINE
+			or (player.seen and L.OUTDATED_SEEN:format(Theme.Time(player.seen))) or L.OUTDATED_NEVER
+		Theme.TooltipDouble(player.name, player.version .. "   " .. when, Theme.Color(player.online and "text" or "muted"))
+		silent = silent or player.silent
+	end
+	if silent then Theme.TooltipLine(L.OUTDATED_SILENT, Theme.Color("muted")) end
+	Theme.TooltipShow()
+end
+
+-- Bottom right: "6 players have an outdated addon", the number underlined
+-- with dots, the footer's line ending before it. Hidden when everyone is
+-- up to date.
+local function RefreshOutdated()
+	local notice = frame.outdated
+	local data = ns.Sync.Outdated()
+	notice.data = data
+	local n = #data.players
+	if n == 0 then
+		notice:Hide()
+		frame.footer:SetPoint("BOTTOMRIGHT", -PAD - 2, PAD - 7)
+		return
+	end
+	notice.count:SetText(tostring(n))
+	notice.rest:SetText(n == 1 and L.OUTDATED_ONE or L.OUTDATED_MANY)
+	local width = notice.count:GetStringWidth()
+	notice:SetWidth(width + 3 + notice.rest:GetStringWidth())
+	local dots = math.max(1, math.floor((width + 1) / 3))
+	for index = 1, math.max(dots, #notice.dots) do
+		local dot = notice.dots[index]
+		if index <= dots then
+			if not dot then
+				dot = notice:CreateTexture(nil, "OVERLAY")
+				dot:SetSize(2, 1)
+				local r, g, b = Theme.Color("title")
+				dot:SetColorTexture(r, g, b, 0.85)
+				dot:SetPoint("TOPLEFT", notice.count, "BOTTOMLEFT", (index - 1) * 3, -1)
+				notice.dots[index] = dot
+			end
+			dot:Show()
+		elseif dot then
+			dot:Hide()
+		end
+	end
+	notice:Show()
+	frame.footer:SetPoint("BOTTOMRIGHT", notice, "BOTTOMLEFT", -12, 0)
+end
+
 local function RefreshFooter()
 	if not frame or not frame.footer or not ns.Sync then return end
 	local status = ns.Sync.Status()
 	frame.footer:SetText(UI.SyncText(status))
 	frame.footer:SetTextColor(Theme.Color(status.phase == "busy" and "title" or "muted"))
+	Util.Guard("outdated", RefreshOutdated)
 end
 
 local function BuildShell()
@@ -266,6 +322,21 @@ local function BuildShell()
 	footer:SetWordWrap(false)
 	footer:SetTextColor(Theme.Color("muted"))
 	frame.footer = footer
+	local notice = CreateFrame("Frame", nil, frame)
+	notice:SetPoint("BOTTOMRIGHT", -PAD - 2, PAD - 7)
+	notice:SetHeight(14)
+	notice:EnableMouse(true)
+	notice.rest = notice:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	notice.rest:SetPoint("BOTTOMRIGHT", 0, 0)
+	notice.rest:SetTextColor(Theme.Color("title"))
+	notice.count = notice:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	notice.count:SetPoint("BOTTOMRIGHT", notice.rest, "BOTTOMLEFT", -3, 0)
+	notice.count:SetTextColor(Theme.Color("title"))
+	notice.dots = {}
+	notice:SetScript("OnEnter", ShowOutdated)
+	notice:SetScript("OnLeave", Theme.TooltipHide)
+	notice:Hide()
+	frame.outdated = notice
 	local sinceTick, sinceRoster = 0, 0
 	frame:SetScript("OnUpdate", function(_, elapsed)
 		elapsed = tonumber(elapsed) or 0
@@ -447,3 +518,4 @@ ns.Hook("RosterUpdated", QueueRefresh)
 ns.Hook("SettingsChanged", QueueRefresh)
 ns.Hook("SyncChanged", FooterNow)
 ns.Hook("PeerSeen", FooterNow)
+ns.Hook("PresenceChanged", FooterNow)

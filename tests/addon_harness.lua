@@ -1977,55 +1977,162 @@ section("Members online with the addon")
 -- shows online whose profile we hold or who spoke to us this session. The
 -- hellos heard since our own login are not enough: members already online
 -- never say hello again.
-local function MembersWithProfile()
-	local online, offline = 0, 0
-	for _, client in ipairs(Mock.clients) do
-		local author = A.db().authors[client.guid]
-		if client ~= A and author and author.profile and A.ns.Identity.MemberByTail(A.ns.Util.Tail(client.guid)) then
-			if client.online then online = online + 1 else offline = offline + 1 end
+local function OnlineMembers()
+	local function MembersWithProfile()
+		local online, offline = 0, 0
+		for _, client in ipairs(Mock.clients) do
+			local author = A.db().authors[client.guid]
+			if client ~= A and author and author.profile and A.ns.Identity.MemberByTail(A.ns.Util.Tail(client.guid)) then
+				if client.online then online = online + 1 else offline = offline + 1 end
+			end
 		end
+		return online, offline
 	end
-	return online, offline
-end
-if C.online then C.logout() end
-A.logout()
-A.login()
-advance(30)
-A.ns.Identity.UpdateRoster(true)
-local expectedOnline, knownOffline = MembersWithProfile()
-local countedOnline = A.ns.Sync.Status().peers
-check("after a login every member online with the addon counts, not only the hellos heard since, and nobody offline",
-	countedOnline == expectedOnline and expectedOnline >= 2 and knownOffline >= 1,
-	("%d counted, %d online, %d offline"):format(countedOnline, expectedOnline, knownOffline))
+	if C.online then C.logout() end
+	A.logout()
+	A.login()
+	advance(30)
+	A.ns.Identity.UpdateRoster(true)
+	local expectedOnline, knownOffline = MembersWithProfile()
+	local countedOnline = A.ns.Sync.Status().peers
+	check("after a login every member online with the addon counts, not only the hellos heard since, and nobody offline",
+		countedOnline == expectedOnline and expectedOnline >= 2 and knownOffline >= 1,
+		("%d counted, %d online, %d offline"):format(countedOnline, expectedOnline, knownOffline))
 
--- A member whose profile we lack counts once a message of theirs came in.
-local bProfile = A.db().authors[B.guid].profile
-A.db().authors[B.guid].profile = nil
-B.ns.Sync.SendRaw("Z^here", "GUILD")
-advance(1)
-check("a member we only heard from counts too", B.online and A.ns.Sync.Status().peers == expectedOnline,
-	A.ns.Sync.Status().peers)
-A.db().authors[B.guid].profile = bProfile
+	-- A member whose profile we lack counts once a message of theirs came in.
+	local bProfile = A.db().authors[B.guid].profile
+	A.db().authors[B.guid].profile = nil
+	B.ns.Sync.SendRaw("Z^here", "GUILD")
+	advance(1)
+	check("a member we only heard from counts too", B.online and A.ns.Sync.Status().peers == expectedOnline,
+		A.ns.Sync.Status().peers)
+	A.db().authors[B.guid].profile = bProfile
 
--- Who is online comes from the roster: asked again when the board opens,
--- and once a minute while it stays open.
-local rosterAsked = 0
-local guildInfo = A.env.C_GuildInfo
-local askRoster = guildInfo.GuildRoster
-guildInfo.GuildRoster = function(...)
-	rosterAsked = rosterAsked + 1
-	return askRoster(...)
+	-- Who is online comes from the roster: asked again when the board opens,
+	-- and once a minute while it stays open.
+	local rosterAsked = 0
+	local guildInfo = A.env.C_GuildInfo
+	local askRoster = guildInfo.GuildRoster
+	guildInfo.GuildRoster = function(...)
+		rosterAsked = rosterAsked + 1
+		return askRoster(...)
+	end
+	A.slash("")
+	local board = A.env.KilledBySavagesFrame
+	local askedAtOpening = rosterAsked
+	board:GetScript("OnUpdate")(board, 61)
+	check("the board asks for the roster when it opens, and once a minute while open", askedAtOpening >= 1
+		and rosterAsked == askedAtOpening + 1, ("%d at opening, %d after a minute"):format(askedAtOpening, rosterAsked))
+	A.slash("")
+	guildInfo.GuildRoster = askRoster
+	C.login()
+	advance(20)
 end
-A.slash("")
-local board = A.env.KilledBySavagesFrame
-local askedAtOpening = rosterAsked
-board:GetScript("OnUpdate")(board, 61)
-check("the board asks for the roster when it opens, and once a minute while open", askedAtOpening >= 1
-	and rosterAsked == askedAtOpening + 1, ("%d at opening, %d after a minute"):format(askedAtOpening, rosterAsked))
-A.slash("")
-guildInfo.GuildRoster = askRoster
-C.login()
-advance(20)
+OnlineMembers()
+
+--------------------------------------------------------------------------------
+section("Players on an older addon")
+--------------------------------------------------------------------------------
+
+-- The players whose addon is older than the newest release, by player and
+-- judged by the character heard from last. A hello goes out at the login
+-- after an update however recent the last one, a presence message now and
+-- then tells the version to those who missed it, and an alt that logs in
+-- with the new addon clears its player. The board says how many, the
+-- number underlined with dots, and names them on hover. Here A runs
+-- 0.1.19, B 0.1.14, C 0.1.18 and the others 0.1.0-test.
+local function OutdatedAddons()
+	local Sync, L = A.ns.Sync, A.ns.L
+	local function NameOf(client)
+		local author = A.db().authors[client.guid]
+		return author and author.profile and author.profile.alias or client.name
+	end
+	local function Listed(name)
+		for _, player in ipairs(Sync.Outdated().players) do
+			if player.name == name then return player end
+		end
+		return nil
+	end
+	local function NewSession(client, version)
+		client.logout()
+		client.version = version
+		client.login()
+		advance(30)
+	end
+	A.ns.Identity.UpdateRoster(true)
+	local listB, listC = Listed(NameOf(B)), Listed(NameOf(C))
+	check("the players on an older addon than the newest release are listed with their version, not ourselves",
+		Sync.Outdated().newest == "0.1.19" and listB and listB.version == "0.1.14" and listB.silent == true
+		and listC and listC.version == "0.1.18" and not listC.silent and Listed(NameOf(A)) == nil,
+		listB and listB.version)
+
+	-- C updates and logs in again two minutes after its last hello.
+	local skipped = C.counter("sync.helloSkipped")
+	NewSession(C, "0.1.19")
+	check("an update is said at the next login however recent the last hello, and its player drops off",
+		Listed(NameOf(C)) == nil and C.counter("sync.helloSkipped") == skipped)
+
+	-- D updated while A was away: A's copy still says the old version, until
+	-- D's next presence message.
+	NewSession(D, "0.1.19")
+	A.db().authors[D.guid].profile.version = "0.1.0-test"
+	local wasListed = Listed(NameOf(D)) ~= nil
+	local presences = A.counter("sync.presenceReceived")
+	advance(600)
+	check("a presence message brings the version a member runs now", wasListed and Listed(NameOf(D)) == nil
+		and A.counter("sync.presenceReceived") > presences and A.db().authors[D.guid].profile.version == "0.1.19")
+
+	-- B's alt logs in with the new addon: B's player is up to date, whatever
+	-- B itself was last heard on.
+	local alt = NewClient({ name = "Bryn Ironvale", guid = Guid(30), class = "PRIEST", race = "Dwarf", guild = "Savages",
+		lifetime = 5, battleTag = "Brenna#1188", rank = 5 })
+	Mock.SetGuildRoster({ { guid = A.guid, rank = 0 }, { guid = B.guid, rank = 2 }, { guid = C.guid, rank = 4 }, { guid = Guid(5), rank = 3 },
+		{ guid = D.guid, rank = 3 }, { guid = E.guid, rank = 3 }, { guid = F.guid, rank = 3 }, { guid = G.guid, rank = 3 }, { guid = H.guid, rank = 3 },
+		{ guid = I.guid, rank = 3 }, { guid = J.guid, rank = 3 }, { guid = K.guid, rank = 3 }, { guid = Guid(13), rank = 5 }, { guid = Guid(14), rank = 5 },
+		{ guid = Lc.guid, rank = 3 }, { guid = Mc.guid, rank = 3 }, { guid = alt.guid, rank = 5 } })
+	RefreshRosters()
+	-- One account plays one character at a time: B logs out, its alt in.
+	B.logout()
+	advance(5)
+	alt.version = "0.1.19"
+	alt.login()
+	advance(30)
+	A.ns.Identity.UpdateRoster(true)
+	local stillBehind = false
+	for _, player in ipairs(Sync.Outdated().players) do
+		if player.version == "0.1.14" or player.name == "Bryn Ironvale" or player.name == NameOf(B) then stillBehind = true end
+	end
+	check("an alt that logs in with the new addon clears its player", not stillBehind)
+	alt.logout()
+	advance(5)
+	B.version = "0.1.19"
+	B.login()
+	advance(30)
+
+	-- The board: how many, the number dotted, the names on hover.
+	local behind = #Sync.Outdated().players
+	A.slash("")
+	local board = A.env.KilledBySavagesFrame
+	board:GetScript("OnUpdate")(board, 1)
+	local notice = board.outdated
+	check("the board says how many players have an outdated addon", behind >= 1 and notice.shown
+		and notice.count.text == tostring(behind) and notice.rest.text == (behind == 1 and L.OUTDATED_ONE or L.OUTDATED_MANY)
+		and #notice.dots >= 1, notice.count.text)
+	notice:GetScript("OnEnter")(notice)
+	local tip = A.env.GameTooltip.tooltipLines or {}
+	local namesOld = false
+	for index = 2, #tip do
+		if tip[index]:find("0.1.0-test", 1, true) then namesOld = true end
+	end
+	check("hovering it lists them with their version", tip[1] == L.OUTDATED_TITLE:format("0.1.19") and namesOld, tip[1])
+	local real = Sync.Outdated
+	Sync.Outdated = function() return { newest = "0.1.19", players = {} } end
+	board:GetScript("OnUpdate")(board, 1)
+	check("with everyone up to date there is no notice", not board.outdated.shown)
+	Sync.Outdated = real
+	A.slash("")
+end
+OutdatedAddons()
 
 --------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")
@@ -2040,7 +2147,9 @@ for _, client in ipairs(Mock.clients) do
 		check(client.name .. ": SavedVariables clean", okSave, message)
 	end
 end
-check("the saved data stays small", #Serialize(A.db()) < 23000, #Serialize(A.db()))
+-- 25000 since 1.0.0: one more member (an alt) and the time each member was
+-- last heard from add about 700 bytes.
+check("the saved data stays small", #Serialize(A.db()) < 25000, #Serialize(A.db()))
 check("records are stored as strings, not tables", (function()
 	for _, entry in pairs(A.db().authors[Guid(1)].log) do
 		if type(entry) ~= "string" then return false end

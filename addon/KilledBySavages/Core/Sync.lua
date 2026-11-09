@@ -60,6 +60,8 @@ local BUSY_WAIT = 20              -- before asking again a holder that said it w
 local FAIL_RETRY = 300            -- before a holder that failed us gets another chance
 local GONE_WINDOW = 120           -- no whisper to a member the server called absent, unless it speaks again
 local NOT_FOUND_WINDOW = 15       -- a "not playing" answer this soon after our whisper is about it
+local PRESENCE_PERIOD = 600       -- between presence messages: who is here, on which version
+local PRESENCE_FIRST_MIN, PRESENCE_FIRST_MAX = 60, 600 -- the first one, spread so logins do not line up
 
 local LibDeflate = LibStub and LibStub("LibDeflate", true)
 
@@ -77,6 +79,7 @@ local busyUntil = {}              -- holder canon -> when it may be asked again
 local whispered = {}              -- member canon -> when we last whispered it
 local gone = {}                   -- member canon -> when the server said nobody by that name was playing
 local heard = {}                  -- member canon -> when any addon message of theirs last came in
+local presence = {}               -- member canon -> { version, playerKey, at } from their presence messages
 local outPages = 0
 local inventorySent = false
 local recovery                    -- { from, to, until } while a crash is being recovered
@@ -269,12 +272,16 @@ function Sync.SendHello(reason)
 	if not Identity.InGuild() or not me.tail then return false end
 	local char = Char()
 	helloDueAt = nil
-	if reason ~= "recovery" and reason ~= "import" and Now() - (char.lastHello or 0) < HELLO_MIN_GAP then
+	-- A /reload soon after a hello says nothing new, unless the addon was
+	-- updated in between: the guild hears of the new version at once.
+	if reason ~= "recovery" and reason ~= "import" and char.helloVersion == ns.VERSION
+		and Now() - (char.lastHello or 0) < HELLO_MIN_GAP then
 		ns.Count("sync.helloSkipped")
 		ns.Fire("SyncChanged")
 		return false
 	end
 	char.lastHello = Now()
+	char.helloVersion = ns.VERSION
 	lastHeadAnnounced = OwnHead()
 	seenHead = {}
 	local lifeHK = char.lifeHK or 0
@@ -323,6 +330,17 @@ local function HeldEntries()
 	end
 	table.sort(entries, function(a, b) return a.tail < b.tail end)
 	return entries
+end
+
+-- Who is here and on which version, now and then: a member who logged in
+-- after our hello learns it, and hellos only go out at login and when the
+-- journal grows. Clients before 1.0.0 ignore it.
+function Sync.SendPresence()
+	local me = Me()
+	if not Identity.InGuild() or not me.tail then return false end
+	SendGuild("O", ("O^%s^%s"):format(Clean(ns.VERSION), Clean(me.playerKey or "")), 2)
+	ns.Count("sync.presence")
+	return true
 end
 
 function Sync.SendInventory()
@@ -459,6 +477,93 @@ end
 -- The newer version the player was told of, for /kbs status.
 function Sync.NewerVersion()
 	return versionTold
+end
+
+-- The newest release anyone runs, ours included: what up to date means.
+local function NewestRelease()
+	local best, bestNumbers
+	local function Consider(version)
+		local numbers = Numbers(version, true)
+		if numbers and (not bestNumbers or Newer(numbers, bestNumbers)) then best, bestNumbers = version, numbers end
+	end
+	Consider(ns.VERSION)
+	Consider(versionTold)
+	for _, author in pairs(ns.db.authors) do
+		Consider(author.profile and author.profile.version)
+	end
+	for _, seen in pairs(presence) do
+		Consider(seen.version)
+	end
+	return best, bestNumbers
+end
+
+-- The name a player shows under, as on the players ranking: the alias of
+-- the character heard from last that has one, else the character with the
+-- most kills ever.
+local function PlayerName(characters)
+	local alias, main, mainKills
+	for _, character in ipairs(characters) do
+		alias = alias or character.alias
+		local kills = ns.Stats and ns.Stats.Character(character.guid, "all", "all").kills or 0
+		if not main or kills > mainKills or (kills == mainKills and character.name < main.name) then
+			main, mainKills = character, kills
+		end
+	end
+	return alias or (main and main.name) or "?"
+end
+
+-- The guild members whose addon is older than the newest release, by
+-- player: each judged by the character heard from last, so a player who
+-- updated drops off as soon as any of its characters says so (a hello at
+-- login, a presence message). Members still in the guild only, our own
+-- player left out. Online players first, then the latest seen.
+function Sync.Outdated()
+	local newest, newestNumbers = NewestRelease()
+	local result = { newest = newest, players = {} }
+	if not newestNumbers then return result end
+	local mine = Me().playerKey
+	local groups = {}
+	for tail, member in pairs(Identity.roster.byTail) do
+		local guid = member.guid or GuidOf(tail)
+		local author = ns.db.authors[guid]
+		local profile = author and author.profile
+		local seen = member.canon and presence[member.canon]
+		local version = (profile and profile.version) or (seen and seen.version)
+		local key = (profile and profile.playerKey) or (seen and seen.playerKey) or guid
+		if version and not (author and author.own) and key ~= mine then
+			local group = groups[key]
+			if not group then
+				group = { characters = {}, online = false }
+				groups[key] = group
+			end
+			group.characters[#group.characters + 1] = {
+				guid = guid, name = (profile and profile.name) or member.name or "?", version = version,
+				alias = profile and profile.alias or nil,
+				at = math.max(author and author.lastHello or 0, author and author.seenAt or 0, seen and seen.at or 0),
+			}
+			if member.online then group.online = true end
+		end
+	end
+	for _, group in pairs(groups) do
+		table.sort(group.characters, function(a, b)
+			if a.at ~= b.at then return a.at > b.at end
+			return a.name < b.name
+		end)
+		local last = group.characters[1]
+		local numbers = Numbers(last.version)
+		if numbers and Newer(newestNumbers, numbers) then
+			result.players[#result.players + 1] = {
+				name = PlayerName(group.characters), version = last.version, online = group.online,
+				seen = last.at > 0 and last.at or nil, silent = Newer(VERSION_TELLS_SINCE, numbers),
+			}
+		end
+	end
+	table.sort(result.players, function(a, b)
+		if a.online ~= b.online then return a.online end
+		if (a.seen or 0) ~= (b.seen or 0) then return (a.seen or 0) > (b.seen or 0) end
+		return a.name < b.name
+	end)
+	return result
 end
 
 --------------------------------------------------------------------------------
@@ -1065,6 +1170,23 @@ local function OnRecord(sender, tail, seq, text)
 	end
 end
 
+-- A member is here and runs this version: kept for the session, and on
+-- its profile, which was the author's own word too.
+local function OnPresence(sender, version, playerKey)
+	local member = Identity.Member(sender)
+	if not member or not member.tail or #version > 20 then return end
+	presence[member.canon] = { version = version, playerKey = playerKey ~= "" and playerKey or nil, at = Now() }
+	local author = ns.db.authors[GuidOf(member.tail)]
+	if author then
+		author.seenAt = Now()
+		if author.profile then author.profile.version = version end
+	end
+	-- Older clients ignore presence messages: no reason to keep quiet for them.
+	Heard(version, false)
+	ns.Count("sync.presenceReceived")
+	ns.Fire("PresenceChanged", member.canon)
+end
+
 local function OnAddonMessage(prefix, text, channel, sender)
 	if Util.IsSecret(prefix) or prefix ~= PREFIX then return end
 	if Util.IsSecret(text) or Util.IsSecret(sender) or type(text) ~= "string" then
@@ -1108,6 +1230,9 @@ local function OnAddonMessage(prefix, text, channel, sender)
 		if version and Identity.Member(sender) and not Heard(version, channel == "GUILD") then
 			ns.Count("sync.versionBad")
 		end
+	elseif kind == "O" then
+		local version, playerKey = text:match("^O%^([^%^]+)%^?([^%^]*)$")
+		if version then OnPresence(sender, version, playerKey or "") end
 	elseif kind == "Q" then
 		local tail, page = text:match("^Q%^([%d%-%x]+)%^(%d+)$")
 		if tail then OnRequest(sender, tail, tonumber(page)) end
@@ -1286,6 +1411,10 @@ local function OnLogin()
 	end)
 	Util.Every(10, "sync-timeouts", CheckTimeouts)
 	Util.After(VERSION_SCAN_DELAY, "version-scan", ScanProfiles)
+	Util.After(Jitter(PRESENCE_FIRST_MIN, PRESENCE_FIRST_MAX), "presence", function()
+		Sync.SendPresence()
+		Util.Every(PRESENCE_PERIOD, "presence", Sync.SendPresence)
+	end)
 end
 
 -- A new display name goes out as a new profile.

@@ -42,7 +42,8 @@ to your main chat if you untick the tab option. Close the tab and the feed
 turns off.
 
 **Updates.** When a guildmate runs a newer version of the addon, you are
-told once in the chat.
+told once in the chat. The board's footer says how many players of the
+guild still run an older version; hover the number for their names.
 
 **How it counts.** Kills are the honorable kills the server grants, so an
 assist counts like a killing blow, as in the game; the addon names the
@@ -86,5 +87,7 @@ coché chaque kill et chaque mort de la guilde en monde ouvert avec le score
 entre le membre et l'ennemi, et chaque match de champ de bataille en une
 ligne à sa fin, dans un onglet de chat dédié ou, au choix, dans le chat
 principal. Quand un membre de la guilde a une version plus récente de
-l'addon, un message dans le chat le signale. Rien ne sort du jeu : les
+l'addon, un message dans le chat le signale, et le bas du tableau dit
+combien de joueurs ne sont pas à jour, avec leurs noms au survol. Rien ne
+sort du jeu : les
 données circulent entre membres par messages d'addon cachés.
