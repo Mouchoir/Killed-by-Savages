@@ -76,6 +76,7 @@ local failedBy = {}               -- author tail -> { [holder canon] = when it f
 local busyUntil = {}              -- holder canon -> when it may be asked again
 local whispered = {}              -- member canon -> when we last whispered it
 local gone = {}                   -- member canon -> when the server said nobody by that name was playing
+local heard = {}                  -- member canon -> when any addon message of theirs last came in
 local outPages = 0
 local inventorySent = false
 local recovery                    -- { from, to, until } while a crash is being recovered
@@ -1074,6 +1075,8 @@ local function OnAddonMessage(prefix, text, channel, sender)
 	-- Our own guild messages sometimes come back to us on Forever.
 	if sender == Me().name or Identity.IsMe(sender) then return end
 	ns.Count("sync.in." .. kind)
+	local senderCanon = Identity.Canon(sender)
+	if senderCanon then heard[senderCanon] = Now() end
 	if kind == "H" then
 		local fields = {}
 		for field in (text .. "^"):gmatch("([^%^]*)%^") do fields[#fields + 1] = field end
@@ -1202,13 +1205,29 @@ local function HeldOthers()
 	return n
 end
 
--- Members with the addon around: a hello this session, unless the roster
--- says they left since.
+-- Members with the addon around: those the roster shows online and who run
+-- the addon as far as we know (their profile is held, or a message of theirs
+-- came in this session), plus those whose hello came in lately while the
+-- roster has not caught up with their login. Hellos alone miss everyone
+-- who was online before our own login or /reload: they never say it again.
 local function PeersAround()
 	local n = 0
+	local counted = {}
+	local myTail = Me().tail
+	for tail, member in pairs(Identity.roster.byTail) do
+		if tail ~= myTail and member.online then
+			local author = ns.db.authors[member.guid or GuidOf(tail)]
+			if (author and author.profile) or (member.canon and heard[member.canon]) then
+				n = n + 1
+				counted[tail] = true
+			end
+		end
+	end
 	for _, peer in pairs(peers) do
-		local member = Identity.MemberByTail(peer.tail)
-		if Now() - peer.at < ONLINE_WINDOW and not (member and member.online == false) then n = n + 1 end
+		if not counted[peer.tail] and Now() - peer.at < ONLINE_WINDOW then
+			local member = Identity.MemberByTail(peer.tail)
+			if not (member and member.online == false) then n = n + 1 end
+		end
 	end
 	return n
 end

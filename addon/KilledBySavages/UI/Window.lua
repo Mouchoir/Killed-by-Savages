@@ -23,6 +23,7 @@ local PAD = Theme.PAD
 local BAND = 48
 local FOOTER = 14
 local NAME = "KilledBySavagesFrame"
+local ROSTER_REFRESH = 60         -- seconds between guild roster requests while the board is open
 
 UI.tabs = {}
 UI.tabOrder = {}
@@ -265,9 +266,17 @@ local function BuildShell()
 	footer:SetWordWrap(false)
 	footer:SetTextColor(Theme.Color("muted"))
 	frame.footer = footer
-	local sinceTick = 0
+	local sinceTick, sinceRoster = 0, 0
 	frame:SetScript("OnUpdate", function(_, elapsed)
-		sinceTick = sinceTick + (tonumber(elapsed) or 0)
+		elapsed = tonumber(elapsed) or 0
+		sinceTick = sinceTick + elapsed
+		sinceRoster = sinceRoster + elapsed
+		-- Who is online comes from the guild roster, which the client only
+		-- refreshes on request: once a minute while the board is open.
+		if sinceRoster >= ROSTER_REFRESH then
+			sinceRoster = 0
+			Util.Guard("roster", ns.Identity.RequestRoster)
+		end
 		if sinceTick >= 1 then
 			sinceTick = 0
 			Util.Guard("footer", RefreshFooter)
@@ -379,6 +388,7 @@ function UI.Show()
 		Util.Guard("window-build", BuildShell)
 		if not frame then return end
 	end
+	Util.Guard("roster", ns.Identity.RequestRoster)
 	frame:Show()
 	frame:Raise()
 	UI.SelectTab(state.tab)

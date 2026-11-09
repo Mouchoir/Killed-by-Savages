@@ -1970,6 +1970,64 @@ end
 NewerVersions()
 
 --------------------------------------------------------------------------------
+section("Members online with the addon")
+--------------------------------------------------------------------------------
+
+-- The footer counts the members online with the addon: those the roster
+-- shows online whose profile we hold or who spoke to us this session. The
+-- hellos heard since our own login are not enough: members already online
+-- never say hello again.
+local function MembersWithProfile()
+	local online, offline = 0, 0
+	for _, client in ipairs(Mock.clients) do
+		local author = A.db().authors[client.guid]
+		if client ~= A and author and author.profile and A.ns.Identity.MemberByTail(A.ns.Util.Tail(client.guid)) then
+			if client.online then online = online + 1 else offline = offline + 1 end
+		end
+	end
+	return online, offline
+end
+if C.online then C.logout() end
+A.logout()
+A.login()
+advance(30)
+A.ns.Identity.UpdateRoster(true)
+local expectedOnline, knownOffline = MembersWithProfile()
+local countedOnline = A.ns.Sync.Status().peers
+check("after a login every member online with the addon counts, not only the hellos heard since, and nobody offline",
+	countedOnline == expectedOnline and expectedOnline >= 2 and knownOffline >= 1,
+	("%d counted, %d online, %d offline"):format(countedOnline, expectedOnline, knownOffline))
+
+-- A member whose profile we lack counts once a message of theirs came in.
+local bProfile = A.db().authors[B.guid].profile
+A.db().authors[B.guid].profile = nil
+B.ns.Sync.SendRaw("Z^here", "GUILD")
+advance(1)
+check("a member we only heard from counts too", B.online and A.ns.Sync.Status().peers == expectedOnline,
+	A.ns.Sync.Status().peers)
+A.db().authors[B.guid].profile = bProfile
+
+-- Who is online comes from the roster: asked again when the board opens,
+-- and once a minute while it stays open.
+local rosterAsked = 0
+local guildInfo = A.env.C_GuildInfo
+local askRoster = guildInfo.GuildRoster
+guildInfo.GuildRoster = function(...)
+	rosterAsked = rosterAsked + 1
+	return askRoster(...)
+end
+A.slash("")
+local board = A.env.KilledBySavagesFrame
+local askedAtOpening = rosterAsked
+board:GetScript("OnUpdate")(board, 61)
+check("the board asks for the roster when it opens, and once a minute while open", askedAtOpening >= 1
+	and rosterAsked == askedAtOpening + 1, ("%d at opening, %d after a minute"):format(askedAtOpening, rosterAsked))
+A.slash("")
+guildInfo.GuildRoster = askRoster
+C.login()
+advance(20)
+
+--------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")
 --------------------------------------------------------------------------------
 
