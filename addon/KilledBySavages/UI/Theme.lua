@@ -35,6 +35,7 @@ Theme.COLORS = {
 	horde = { 0.749, 0.29, 0.29 },
 	alliance = { 0.29, 0.478, 0.749 },
 	green = { 0.12, 1, 0.25 },
+	warn = { 1, 0.55, 0.15 },          -- orange: someone to act on
 }
 
 Theme.PAD = 16
@@ -313,9 +314,10 @@ function Theme.TooltipLine(text, r, g, b)
 	GameTooltip:AddLine(text, r or 0.8, g or 0.8, b or 0.8, true)
 end
 
-function Theme.TooltipDouble(left, right, r, g, b)
+-- The right side in sand unless a colour is given for it too.
+function Theme.TooltipDouble(left, right, r, g, b, rr, rg, rb)
 	if not GameTooltip then return end
-	GameTooltip:AddDoubleLine(left, right, r or 0.8, g or 0.8, b or 0.8, 0.93, 0.84, 0.66)
+	GameTooltip:AddDoubleLine(left, right, r or 0.8, g or 0.8, b or 0.8, rr or 0.93, rg or 0.84, rb or 0.66)
 end
 
 function Theme.TooltipShow()

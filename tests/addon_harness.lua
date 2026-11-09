@@ -2109,6 +2109,12 @@ local function OutdatedAddons()
 	B.login()
 	advance(30)
 
+	-- E on 0.1.16: behind, but its addon tells it of the new one.
+	if E.online then E.logout() end
+	E.version = "0.1.16"
+	E.login()
+	advance(30)
+
 	-- The board: how many, the number dotted, the names on hover.
 	local behind = #Sync.Outdated().players
 	A.slash("")
@@ -2125,6 +2131,22 @@ local function OutdatedAddons()
 		if tip[index]:find("0.1.0-test", 1, true) then namesOld = true end
 	end
 	check("hovering it lists them with their version", tip[1] == L.OUTDATED_TITLE:format("0.1.19") and namesOld, tip[1])
+	-- Those too old to be told are in orange, the whole line; the others not.
+	local warnR, warnG, warnB = A.ns.Theme.Color("warn")
+	local colors = A.env.GameTooltip.tooltipColors or {}
+	local lineE, oldInOrange = nil, false
+	for index = 2, #tip do
+		if tip[index]:find(NameOf(E) .. " | ", 1, true) == 1 then lineE = index end
+		local c = colors[index]
+		if tip[index]:find("0.1.0-test", 1, true) and c and c[1] == warnR and c[2] == warnG and c[3] == warnB
+			and c[4] == warnR and c[5] == warnG and c[6] == warnB then
+			oldInOrange = true
+		end
+	end
+	local colorE = lineE and colors[lineE]
+	check("the players too old to be told are in orange, the whole line, the others not, and the note says what orange means",
+		oldInOrange and colorE ~= nil and colorE[1] ~= warnR and colorE[4] ~= warnR and tip[#tip] == L.OUTDATED_SILENT,
+		lineE and tip[lineE])
 	local real = Sync.Outdated
 	Sync.Outdated = function() return { newest = "0.1.19", players = {} } end
 	board:GetScript("OnUpdate")(board, 1)

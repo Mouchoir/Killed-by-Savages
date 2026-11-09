@@ -46,7 +46,7 @@ local L = {
 	OUTDATED_ONLINE = "online",
 	OUTDATED_SEEN = "seen %s",
 	OUTDATED_NEVER = "not seen yet",
-	OUTDATED_SILENT = "Versions before 0.1.15 never tell their player a new one is out: let them know.",
+	OUTDATED_SILENT = "In orange: versions before 0.1.15, which never tell their player a new one is out. Let them know.",
 	UPDATE_AVAILABLE = "A new version (%s) is available. Please update!",
 	STATUS_WINDOW_SOON = "The kill board window is not in this version yet.",
 	DEBUG_HEADER = "Killed by Savages %s, debug",
@@ -203,7 +203,7 @@ local translations = {
 		OUTDATED_ONLINE = "en ligne",
 		OUTDATED_SEEN = "vu %s",
 		OUTDATED_NEVER = "pas encore vu",
-		OUTDATED_SILENT = "Avant la 0.1.15, l'addon ne prévient pas son joueur qu'une nouvelle version existe : il faut le lui dire.",
+		OUTDATED_SILENT = "En orange : les versions d'avant la 0.1.15, qui ne préviennent pas leur joueur qu'une nouvelle version existe. Il faut le leur dire.",
 		UPDATE_AVAILABLE = "Une nouvelle version (%s) est disponible. Mettez à jour !",
 		STATUS_WINDOW_SOON = "La fenêtre du tableau de chasse n'est pas encore dans cette version.",
 

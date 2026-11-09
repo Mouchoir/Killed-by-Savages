@@ -83,7 +83,15 @@ local function ShowOutdated(self)
 	for _, player in ipairs(data.players) do
 		local when = player.online and L.OUTDATED_ONLINE
 			or (player.seen and L.OUTDATED_SEEN:format(Theme.Time(player.seen))) or L.OUTDATED_NEVER
-		Theme.TooltipDouble(player.name, player.version .. "   " .. when, Theme.Color(player.online and "text" or "muted"))
+		local right = player.version .. "   " .. when
+		if player.silent then
+			-- In orange, the whole line: a version too old to tell its player,
+			-- someone to tell in person.
+			local r, g, b = Theme.Color("warn")
+			Theme.TooltipDouble(player.name, right, r, g, b, r, g, b)
+		else
+			Theme.TooltipDouble(player.name, right, Theme.Color(player.online and "text" or "muted"))
+		end
 		silent = silent or player.silent
 	end
 	if silent then Theme.TooltipLine(L.OUTDATED_SILENT, Theme.Color("muted")) end
