@@ -1504,11 +1504,15 @@ local function FeedWindow(client)
 	end
 	return nil
 end
-local function ChatSince(client, from, needle)
+local function CountSince(client, from, needle)
+	local n = 0
 	for index = from + 1, #client.chat do
-		if client.chat[index]:find(needle, 1, true) then return true end
+		if client.chat[index]:find(needle, 1, true) then n = n + 1 end
 	end
-	return false
+	return n
+end
+local function ChatSince(client, from, needle)
+	return CountSince(client, from, needle) > 0
 end
 -- A new session. The kills here move the server's counter without the
 -- client's event, so a login sees a jump and holds new records while the
@@ -1554,11 +1558,24 @@ KillZaljin(A)
 MateKill(A, B)
 check("off, neither my kills nor a guildmate's write anything in the chat", not ChatSince(A, chatMark, "Zaljin Darkspear") and FeedWindow(A) == nil)
 
--- Ticked: the tab opens at once and is selected, so the player sees it.
+-- Ticked with no tab of that name: the lines go to the main chat, and a line
+-- there says how to make the tab, once, naming the General tab and its menu
+-- entry in the client's words. The addon opens no chat window: run from an
+-- addon, the game's chat window code taints the chat edit box.
+local howTo = A.ns.L.KILLFEED_MAKE_TAB:format(A.ns.L.KILLFEED_TAB, "General", "New Window", A.ns.L.KILLFEED_TAB)
+local windowsBefore = count(A.windows)
+chatMark = #A.chat
 Tick(A, true)
+KillZaljin(A)
+KillZaljin(A)
+check("ticked with no Kills tab, the lines go to the main chat, told once how to make the tab, and no window opens",
+	A.db().settings.killfeed == true and FeedWindow(A) == nil and count(A.windows) == windowsBefore
+	and ChatSince(A, chatMark, A.ns.L.KILLFEED_ON_MAIN) and CountSince(A, chatMark, "Zaljin Darkspear") == 2
+	and CountSince(A, chatMark, howTo) == 1, CountSince(A, chatMark, howTo))
+
+-- The player makes the tab: the lines land there from the next one on.
+A.asPlayer(A.env.FCF_OpenNewWindow, A.ns.L.KILLFEED_TAB, true)
 local feedTab = FeedWindow(A)
-check("ticked, the kill feed opens a chat tab of its own, selected", A.db().settings.killfeed == true and feedTab ~= nil
-	and #feedTab.lines == 1 and feedTab.lines[1] == A.ns.L.KILLFEED_ON and A.selected == feedTab.frame, feedTab and #feedTab.lines)
 
 -- A named kill of mine: the line carries both names and my score on the enemy.
 before = #feedTab.lines
@@ -1714,42 +1731,49 @@ local function RepeatedDeathFeed()
 end
 RepeatedDeathFeed()
 
--- The tab outlives a login: found again, not opened twice, and the tab the
--- player reads stays selected.
+-- The tab outlives a login: the lines find it again, nothing is opened.
 before = #feedTab.lines
 Relog(A)
+KillZaljin(A)
 local feedCount = 0
 for _, w in pairs(A.windows) do
 	if w.name == A.ns.L.KILLFEED_TAB then feedCount = feedCount + 1 end
 end
-check("at the next login the tab is found again, not opened twice", FeedWindow(A) == feedTab and feedCount == 1
-	and #feedTab.lines == before and A.selected == A.env.DEFAULT_CHAT_FRAME)
+check("at the next login the lines find the tab again, and no tab is opened", FeedWindow(A) == feedTab and feedCount == 1
+	and #feedTab.lines == before + 1)
 
 -- The option is account-wide, chat tabs belong to each character: one
--- without the tab gets it at login, behind the tab the player reads.
+-- without the tab gets the lines in the main chat, told once how to make it.
 Relog(A, function() A.windows = {} end)
-feedTab = FeedWindow(A)
-check("a character without the tab gets it at login, not selected", feedTab ~= nil and feedTab.lines[1] == A.ns.L.KILLFEED_ON
-	and A.selected == A.env.DEFAULT_CHAT_FRAME)
+chatMark = #A.chat
+KillZaljin(A)
+KillZaljin(A)
+check("a character without the tab gets the lines in the main chat, told once how to make the tab",
+	FeedWindow(A) == nil and CountSince(A, chatMark, "Zaljin Darkspear") == 2 and CountSince(A, chatMark, howTo) == 1)
 
--- The player closes the tab: the feed turns off, said once in the main
--- chat, and the next kill goes nowhere.
-A.env.FCF_Close(feedTab.frame)
+-- The player makes the tab, then closes it: the feed turns off, said once
+-- in the main chat, and the next kill goes nowhere.
+A.asPlayer(A.env.FCF_OpenNewWindow, A.ns.L.KILLFEED_TAB, true)
+feedTab = FeedWindow(A)
+KillZaljin(A)
+A.asPlayer(A.env.FCF_Close, feedTab.frame)
 before = #feedTab.lines
 chatMark = #A.chat
 KillZaljin(A)
 check("closing the tab turns the feed off, said in the main chat", A.db().settings.killfeed == false
 	and ChatSince(A, chatMark, A.ns.L.KILLFEED_CLOSED) and not ChatSince(A, chatMark, "Zaljin Darkspear") and #feedTab.lines == before)
 
--- Ticked again, the tab comes back; unticked, the tab it opened closes.
+-- Ticked again with the tab still closed: the main chat again, with how to
+-- make the tab; unticked, no line goes anywhere.
+chatMark = #A.chat
 Tick(A, true)
-feedTab = FeedWindow(A)
-check("ticked again, the tab comes back", A.db().settings.killfeed == true and feedTab ~= nil and feedTab.lines[1] == A.ns.L.KILLFEED_ON)
+KillZaljin(A)
+check("ticked again with no tab, the lines go to the main chat with how to make it", A.db().settings.killfeed == true
+	and FeedWindow(A) == nil and ChatSince(A, chatMark, howTo) and ChatSince(A, chatMark, "Zaljin Darkspear"))
 Tick(A, false)
 chatMark = #A.chat
 KillZaljin(A)
-check("unticked, the tab closes and no line goes anywhere", A.db().settings.killfeed == false and FeedWindow(A) == nil
-	and A.db().characters[A.guid].feedTab == nil and not ChatSince(A, chatMark, "Zaljin Darkspear"))
+check("unticked, no line goes anywhere", A.db().settings.killfeed == false and not ChatSince(A, chatMark, "Zaljin Darkspear"))
 
 -- The second box says where the lines go: the feed's own tab (ticked by
 -- default) or the main chat. It only matters, and only wakes up, while the
@@ -1772,72 +1796,94 @@ local tabBox = OptionsBox(A, 3)
 local restingR, restingG = A.ns.Theme.Color("disabled")
 check("off, the feed's tab box rests, greyed", tabBox.enabled == false and tabBox.label.color[1] == restingR
 	and tabBox.label.color[2] == restingG)
+-- The player makes the tab again: ticked, the feed wakes its box up and
+-- says so in the tab.
+A.asPlayer(A.env.FCF_OpenNewWindow, A.ns.L.KILLFEED_TAB, true)
 Tick(A, true)
-check("ticked, the feed wakes its tab box up at once", tabBox.enabled == true and FeedWindow(A) ~= nil)
+feedTab = FeedWindow(A)
+check("ticked, the feed wakes its tab box up at once and says so in the player's tab", tabBox.enabled == true
+	and feedTab ~= nil and feedTab.lines[#feedTab.lines] == A.ns.L.KILLFEED_ON)
 chatMark = #A.chat
+before = #feedTab.lines
 TickTab(A, false)
 KillZaljin(A)
-check("unticked, the tab closes and the lines go to the main chat, said there", FeedWindow(A) == nil
-	and A.db().settings.killfeed == true and A.db().settings.killfeedTab == false
+check("unticked, the lines go to the main chat, said there, and the player's tab stays as it is", FeedWindow(A) == feedTab
+	and #feedTab.lines == before and A.db().settings.killfeed == true and A.db().settings.killfeedTab == false
 	and ChatSince(A, chatMark, A.ns.L.KILLFEED_ON_MAIN) and ChatSince(A, chatMark, "Zaljin Darkspear"))
 Relog(A)
 chatMark = #A.chat
 KillZaljin(A)
-check("after a login the lines still go to the main chat, and no tab opens", FeedWindow(A) == nil
-	and ChatSince(A, chatMark, "Zaljin Darkspear"))
+check("after a login the lines still go to the main chat", ChatSince(A, chatMark, "Zaljin Darkspear") and #feedTab.lines == before)
 Tick(A, false)
 chatMark = #A.chat
 Tick(A, true)
-check("ticked with the main chat chosen, the feed opens no tab and says so there", FeedWindow(A) == nil
-	and ChatSince(A, chatMark, A.ns.L.KILLFEED_ON_MAIN))
+check("ticked with the main chat chosen, the feed says so there", ChatSince(A, chatMark, A.ns.L.KILLFEED_ON_MAIN)
+	and not ChatSince(A, chatMark, howTo))
 TickTab(A, true)
-feedTab = FeedWindow(A)
 chatMark = #A.chat
 KillZaljin(A)
-check("ticked again, the tab comes back selected and takes the lines", feedTab ~= nil and A.selected == feedTab.frame
-	and (feedTab.lines[#feedTab.lines] or ""):find("Zaljin Darkspear", 1, true) ~= nil
+check("ticked again, the lines go back to the player's tab", (feedTab.lines[#feedTab.lines] or ""):find("Zaljin Darkspear", 1, true) ~= nil
 	and not ChatSince(A, chatMark, "Zaljin Darkspear"))
 Tick(A, false)
 
 -- Closed with no line before the logout: the feed is off all the same.
 A.ns.Killfeed.Enable()
-A.env.FCF_Close(FeedWindow(A).frame)
+A.asPlayer(A.env.FCF_Close, FeedWindow(A).frame)
 A.logout()
 check("a tab closed before the logout leaves the feed off", A.saved.settings.killfeed == false)
 A.login()
 advance(130)
 check("and no tab opens at the next login", FeedWindow(A) == nil)
 
--- In combat the tab waits for the end of the fight, with the lines.
-A.state.combat = true
-chatMark = #A.chat
-A.ns.Killfeed.Enable()
-KillZaljin(A)
-check("ticked in combat, the tab waits for the fight to end", FeedWindow(A) == nil and ChatSince(A, chatMark, A.ns.L.KILLFEED_AFTER_COMBAT)
-	and not ChatSince(A, chatMark, "Zaljin Darkspear"))
-A.state.combat = false
-A.fire("PLAYER_REGEN_ENABLED")
+-- In a fight the lines go to the tab as ever: nothing waits.
+A.asPlayer(A.env.FCF_OpenNewWindow, A.ns.L.KILLFEED_TAB, true)
 feedTab = FeedWindow(A)
-check("after the fight it opens with the lines that waited", feedTab ~= nil and #feedTab.lines == 2 and feedTab.lines[1] == A.ns.L.KILLFEED_ON
-	and feedTab.lines[2]:find("Zaljin Darkspear", 1, true) ~= nil, feedTab and #feedTab.lines)
-A.ns.Killfeed.Disable()
-
--- No chat window to spare: the lines go to the main chat, said once.
-for index = 1, 7 do A.env.FCF_OpenNewWindow("Tab " .. index) end
-chatMark = #A.chat
 A.ns.Killfeed.Enable()
+A.state.combat = true
 KillZaljin(A)
-check("with every chat window in use, the lines go to the main chat", FeedWindow(A) == nil and ChatSince(A, chatMark, A.ns.L.KILLFEED_NO_TAB)
-	and ChatSince(A, chatMark, "Zaljin Darkspear"))
+check("in a fight the lines still go to the tab", (feedTab.lines[#feedTab.lines] or ""):find("Zaljin Darkspear", 1, true) ~= nil)
+A.state.combat = false
 A.ns.Killfeed.Disable()
-check("unticked, the player's own tabs stay as they were", (function()
-	for index = 4, 10 do
-		local w = A.windows[index]
-		if not (w and w.name == ("Tab " .. (index - 3)) and (w.shown or w.docked)) then return false end
+check("unticked, the player's tab stays open", FeedWindow(A) == feedTab)
+A.asPlayer(A.env.FCF_Close, feedTab.frame)
+
+-- Through all of it the addon opened, closed and selected no chat window,
+-- and no file of it calls the game's code that does: run from an addon,
+-- that code taints the chat edit box for the rest of the session (in game,
+-- /invite was refused and group chat failed on a secret value).
+check("the addon never opens, closes or selects a chat window", (A.addonChatWrites or 0) == 0,
+	table.concat(A.addonChatWriteNames or {}, ", "))
+check("no addon file calls the game's chat window functions that write", (function()
+	local offenders = {}
+	for tocLine in io.lines("addon/KilledBySavages/KilledBySavages.toc") do
+		local file = tocLine:match("^([%w_\\/%.%-]+%.lua)%s*$")
+		if file then
+			local handle = assert(io.open("addon/KilledBySavages/" .. file:gsub("\\", "/"), "rb"))
+			local code = handle:read("*a")
+			handle:close()
+			code = code:gsub("%-%-%[%[.-%]%]", ""):gsub("%-%-[^\n]*", "")
+			for _, name in ipairs({ "FCF_OpenNewWindow", "FCF_Close", "FCFDock_SelectWindow", "FCF_SelectDockFrame",
+				"FCF_DockFrame", "SetLastActiveWindow" }) do
+				if code:find(name, 1, true) then offenders[#offenders + 1] = file .. ": " .. name end
+			end
+		end
 	end
-	return true
+	return #offenders == 0, table.concat(offenders, ", ")
 end)())
-for index = 4, 10 do A.env.FCF_Close(A.env["ChatFrame" .. index]) end
+
+-- Same reason for the game's Settings panel: HideUIPanel run by an addon
+-- taints the panel manager, so the options close it only when it is open.
+local panelHides = 0
+A.env.HideUIPanel = function() panelHides = panelHides + 1 end
+A.env.SettingsPanel = { shown = false, IsShown = function(self) return self.shown end }
+A.slash("options")
+A.slash("")
+local hidesWhileClosed = panelHides
+A.env.SettingsPanel.shown = true
+A.slash("options")
+A.slash("")
+check("the options leave the game's Settings panel alone unless it is open", hidesWhileClosed == 0 and panelHides == 1, panelHides)
+A.env.HideUIPanel, A.env.SettingsPanel = nil, nil
 
 --------------------------------------------------------------------------------
 section("Newer versions")

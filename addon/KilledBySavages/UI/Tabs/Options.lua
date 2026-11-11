@@ -142,7 +142,10 @@ ns.UI.RegisterTab({
 			function() return Settings().killfeedTab ~= false end,
 			function(value) ns.Killfeed.SetTab(value) end)
 		feedTab:SetPoint("TOPLEFT", hint, "BOTTOMLEFT", -4, -8)
-		Hint(chat, feedTab, L.OPTIONS_KILLFEED_TAB_HINT)
+		-- The tab is the player's to make: the hint names the menu entry in the
+		-- client's own words.
+		local entry = type(NEW_CHAT_WINDOW) == "string" and NEW_CHAT_WINDOW or L.KILLFEED_NEW_WINDOW
+		Hint(chat, feedTab, L.OPTIONS_KILLFEED_TAB_HINT:format(entry, L.KILLFEED_TAB))
 		function frame.UpdateFeedTab()
 			local on = Settings().killfeed == true
 			feedTab:SetEnabled(on)

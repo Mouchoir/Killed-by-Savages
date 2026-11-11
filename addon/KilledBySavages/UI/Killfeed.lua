@@ -2,16 +2,23 @@ local _, ns = ...
 
 --------------------------------------------------------------------------------
 -- Kill feed: one line per kill or death of the guild in the world, "X
--- killed Y (2-1)", and one per battleground match, in a chat tab of its
--- own. The score is the kills of the one named first on the other against
--- the other's on them in the world, from the member's own journal.
+-- killed Y (2-1)", and one per battleground match. The score is the kills of
+-- the one named first on the other against the other's on them in the
+-- world, from the member's own journal.
 --
--- Off by default. Ticked, the lines go to a chat tab named after the feed,
--- opened for it and docked with the others, or to the main chat when the
--- second option says so (or the client has no chat window to spare). The
--- options are account-wide while chat tabs belong to each character: a
--- character without the tab gets it at login. Closing the tab turns the
--- feed off; unticking the feed, or the tab, closes the tab it opened.
+-- Off by default. Ticked, the lines go to the chat tab named after the feed
+-- when the player has one, else to the main chat; the second option sends
+-- them to the main chat anyway. Closing that tab turns the feed off.
+--
+-- The addon never opens, closes or selects a chat window. Run from an
+-- addon, Blizzard's chat window code (FCF_OpenNewWindow, FCF_Close,
+-- FCFDock_SelectWindow) writes the active chat edit box as the addon's:
+-- every chat line and slash command the player types afterwards runs
+-- tainted, for the rest of the session. In 12.x a message to the group then
+-- fails on a secret value and /invite is refused as a protected call (both
+-- seen in game with 1.0.0). So the player makes the tab, from the General
+-- tab's menu, and the addon says how, once per session; it only reads the
+-- chat windows and adds lines to them.
 --
 -- In Forever's chat code (1.60.1) a closed window keeps its name, hidden
 -- and out of the dock, and a docked tab behind another is hidden but still
@@ -26,32 +33,25 @@ local L = ns.L
 local Killfeed = {}
 ns.Killfeed = Killfeed
 
-local HOLD_CAP = 50              -- lines kept while the tab cannot open yet
+local HOLD_CAP = 50              -- lines kept until the chat windows are set up
 local SETUP_DELAY = 3            -- seconds after the client set its chat windows up
 local SETUP_LATEST = 10          -- seconds after entering the world, at the latest
 
-local tab                        -- the chat frame the lines go to
-local held = {}                  -- lines waiting for the tab
-local warned = false             -- the main chat was named as the fallback
+local tab                        -- the feed's tab, once a line went to it
+local held = {}                  -- lines waiting for the chat windows
+local hinted = false             -- the player was told how to make the tab, this session
 local chatReady = false          -- the client has set its chat windows up
 local entered = false            -- the character is in the world
-local setupDone = false          -- the login check ran
-local afterCombat = false        -- the tab opens when the fight ends
+local setupDone = false          -- the chat windows can be looked at
 
 local function Settings()
 	return ns.db and ns.db.settings or {}
 end
 
--- The lines go to the feed's own tab, unless the player chose the main chat.
+-- The lines go to the feed's tab when there is one, unless the player chose
+-- the main chat.
 local function InTab()
 	return Settings().killfeedTab ~= false
-end
-
--- This character's own state, which keeps the index of the tab the feed
--- opened.
-local function Mine()
-	local me = ns.Identity and ns.Identity.me
-	return me and me.guid and ns.Db.Character(me.guid) or nil
 end
 
 local function WindowCount()
@@ -97,122 +97,49 @@ local function FindTab()
 	return nil
 end
 
--- A tab found by its name becomes the feed's own, to close with it, when it
--- receives nothing but our lines: closing it then takes nothing from the
--- player.
-local function Adopt(window)
-	local mine = Mine()
-	if not mine then return end
-	local groups, channels = window.messageTypeList, window.channelList
-	if (type(groups) == "table" and next(groups) ~= nil) or (type(channels) == "table" and next(channels) ~= nil) then return end
-	mine.feedTab = window:GetID()
+-- How to make the tab, in the client's own words: the General tab's name and
+-- the entry of its menu that opens a new window. Once per session.
+local function Hint(force)
+	if hinted and not force then return end
+	hinted = true
+	local general = NameOf(1)
+	if type(general) ~= "string" or general == "" then general = L.KILLFEED_GENERAL end
+	local entry = type(NEW_CHAT_WINDOW) == "string" and NEW_CHAT_WINDOW or L.KILLFEED_NEW_WINDOW
+	ns.Print(L.KILLFEED_MAKE_TAB:format(L.KILLFEED_TAB, general, entry, L.KILLFEED_TAB))
 end
 
-local function Selected()
-	if not (Util.Fn(FCFDock_GetSelectedWindow) and GENERAL_CHAT_DOCK) then return nil end
-	local ok, window = pcall(FCFDock_GetSelectedWindow, GENERAL_CHAT_DOCK)
-	return ok and window or nil
-end
-
--- Opens the tab, docked with the others. Without default channels the
--- client removes every message group from it, so it gets nothing but our
--- lines. Quiet, the tab the player was reading stays selected. Returns the
--- window, or nil and why not: "combat" or "full".
-local function OpenTab(quiet)
-	if not Util.Fn(FCF_OpenNewWindow) then return nil, "full" end
-	if Util.Fn(InCombatLockdown) and InCombatLockdown() then return nil, "combat" end
-	local previous = quiet and Selected() or nil
-	local ok, window = pcall(FCF_OpenNewWindow, L.KILLFEED_TAB, true)
-	if not ok then
-		ns.Error("killfeed", window)
-		return nil, "full"
-	end
-	-- Nothing back: every chat window is in use.
-	if type(window) ~= "table" or not window.AddMessage or not window.GetID then return nil, "full" end
-	if previous and previous ~= window and Util.Fn(FCFDock_SelectWindow) then
-		pcall(FCFDock_SelectWindow, GENERAL_CHAT_DOCK, previous)
-	end
-	local mine = Mine()
-	if mine then mine.feedTab = window:GetID() end
-	window:AddMessage(L.KILLFEED_ON)
-	ns.Count("killfeed.tabOpened")
-	return window
-end
-
--- Closes the tab the feed opened on this character. In combat it waits for
--- the fight to end, or the next login.
-local function CloseTab()
-	local mine = Mine()
-	local index = mine and mine.feedTab
-	if not index then return end
-	if Util.Fn(InCombatLockdown) and InCombatLockdown() then return end
-	mine.feedTab = nil
-	local window = Window(index)
-	if not (window and NameOf(index) == L.KILLFEED_TAB and Active(index) and Util.Fn(FCF_Close)) then return end
-	local ok, problem = pcall(FCF_Close, window)
-	if ok then ns.Count("killfeed.tabClosed") else ns.Error("killfeed", problem) end
-end
-
-local function Hold(line)
-	if #held >= HOLD_CAP then table.remove(held, 1) end
-	held[#held + 1] = line
-end
-
--- The feed's tab, found or opened, with the lines that waited for it.
--- Returns the window, or nil and why not.
-local function Open(quiet)
-	local window = FindTab()
-	if window then
-		Adopt(window)
-	else
-		local why
-		window, why = OpenTab(quiet)
-		if not window then
-			afterCombat = why == "combat"
-			if why == "full" then
-				if not warned then
-					warned = true
-					ns.Print(L.KILLFEED_NO_TAB)
-				end
-				for index = 1, #held do
-					ns.Print(held[index])
-				end
-				held = {}
-			end
-			return nil, why
-		end
-	end
-	afterCombat = false
-	tab = window
-	for index = 1, #held do
-		window:AddMessage(held[index])
-	end
-	held = {}
-	return window
-end
-
--- The tab the feed had is gone: the player closed or renamed it. That turns
--- the feed off, said in the main chat.
+-- The tab the lines were going to is gone: the player closed or renamed it.
+-- That turns the feed off, said in the main chat (not at logout).
 local function Closed(quiet)
 	tab = nil
 	held = {}
-	afterCombat = false
-	local mine = Mine()
-	if mine then mine.feedTab = nil end
 	Settings().killfeed = false
 	ns.Count("killfeed.closedByPlayer")
 	if not quiet then ns.Print(L.KILLFEED_CLOSED) end
 	ns.Fire("SettingsChanged")
 end
 
--- Where the next line goes: the tab, or nil and why not.
-local function Target()
-	if Valid(tab) then return tab end
-	if tab then
-		Closed(false)
-		return nil, "closed"
+-- A line to the feed's tab, or to the main chat when the player has none or
+-- chose it.
+local function Deliver(line)
+	if InTab() then
+		if tab and not Valid(tab) then
+			Closed(false)
+			return
+		end
+		tab = tab or FindTab()
+		if tab then
+			tab:AddMessage(line)
+			return
+		end
+		Hint()
 	end
-	return Open(true)
+	ns.Print(line)
+end
+
+local function Hold(line)
+	if #held >= HOLD_CAP then table.remove(held, 1) end
+	held[#held + 1] = line
 end
 
 -- Kills of the member on the enemy, and the enemy's on the member, in the
@@ -300,81 +227,52 @@ local function Feed(guid, seq, record, source)
 	local line = Line(guid, seq, record)
 	if not line then return end
 	ns.Count("killfeed.lines")
-	if not InTab() then
-		ns.Print(line)               -- the main chat is always there
-		return
-	end
 	if not setupDone then
 		Hold(line)                   -- the chat windows are not set up yet
 		return
 	end
-	local target, why = Target()
-	if target then
-		target:AddMessage(line)
-	elseif why == "combat" then
-		Hold(line)
-	elseif why == "full" then
-		ns.Print(line)
-	end
+	Deliver(line)
 end
 
--- Once per session, after the client set its chat windows up: the tab
--- found or opened when the feed is on and goes to it. Otherwise the tab it
--- opened here closes (the feed, or its tab, was turned off on another
--- character).
+-- Once per session, after the client set its chat windows up: the lines
+-- that waited go out.
 local function Setup()
 	if setupDone then return end
 	setupDone = true
-	if Settings().killfeed and InTab() then
-		Open(true)
-	else
-		held = {}
-		CloseTab()
+	local waiting = held
+	held = {}
+	for index = 1, #waiting do
+		Deliver(waiting[index])
 	end
 end
 
--- Ticked: the tab opens now, selected, so the player sees where the lines
--- go; with the main chat chosen, a line there says so.
+-- Ticked, or the second option changed: a line says where the lines will go,
+-- in that place, and how to make the tab when it is wanted and missing.
 function Killfeed.Enable()
 	Settings().killfeed = true
 	setupDone = true
-	warned = false
-	if not InTab() then
-		ns.Print(L.KILLFEED_ON_MAIN)
-		return nil
+	tab = InTab() and FindTab() or nil
+	if tab then
+		tab:AddMessage(L.KILLFEED_ON)
+		return tab
 	end
-	local window, why = Open(false)
-	if not window and why == "combat" then ns.Print(L.KILLFEED_AFTER_COMBAT) end
-	return window
+	ns.Print(L.KILLFEED_ON_MAIN)
+	if InTab() then Hint(true) end
+	return nil
 end
 
--- The second option: the feed's own tab (opened now, selected) or the main
--- chat (the tab the feed opened closes, the lines that waited for it come
--- to the main chat).
+-- The second option: the feed's tab, when the player has one, or the main
+-- chat. The tab itself is the player's: it stays as it is.
 function Killfeed.SetTab(value)
 	Settings().killfeedTab = value and true or false
-	if not Settings().killfeed then return end
-	if value then
-		Killfeed.Enable()
-		return
-	end
-	tab = nil
-	afterCombat = false
-	for index = 1, #held do
-		ns.Print(held[index])
-	end
-	held = {}
-	CloseTab()
-	ns.Print(L.KILLFEED_ON_MAIN)
+	if Settings().killfeed then Killfeed.Enable() end
 end
 
--- Unticked: no more lines, and the tab the feed opened closes.
+-- Unticked: no more lines. The tab, if any, is the player's to close.
 function Killfeed.Disable()
 	Settings().killfeed = false
 	tab = nil
 	held = {}
-	afterCombat = false
-	CloseTab()
 end
 
 ns.Hook("RecordStored", function(guid, seq, record) Feed(guid, seq, record) end)
@@ -390,16 +288,6 @@ ns.Hook("EnteringWorld", function()
 	if entered then return end
 	entered = true
 	Util.After(chatReady and SETUP_DELAY or SETUP_LATEST, "killfeed", Setup)
-end)
-
--- After a fight: the tab that had to wait opens, the one to close closes.
-ns.On("PLAYER_REGEN_ENABLED", function()
-	if not setupDone then return end
-	if Settings().killfeed and InTab() then
-		if afterCombat then Open(true) end
-	else
-		CloseTab()
-	end
 end)
 
 -- A tab the player closed with no line since still turns the feed off.

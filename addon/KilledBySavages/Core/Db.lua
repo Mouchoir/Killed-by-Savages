@@ -53,6 +53,11 @@ function Db.Init()
 	-- default; since 0.1.14 the kill lines only go to the kill feed's tab.
 	db.settings.announce = nil
 	db.characters = db.characters or {}   -- own characters: [guid] = their state
+	-- Up to 1.0.0 the kill feed opened its own chat tab and kept its index
+	-- here; the player makes the tab now.
+	for _, character in pairs(db.characters) do
+		if type(character) == "table" then character.feedTab = nil end
+	end
 	db.authors = db.authors or {}         -- every journal held, own ones included
 	db.pending = db.pending or {}         -- HKs not matched yet (a /reload may interrupt)
 	db.errors = db.errors or {}

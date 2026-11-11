@@ -568,9 +568,20 @@ function Mock.NewClient(spec)
 			if not window then return "", 14, 1, 1, 1, 1, false, false, nil, false end
 			return window.name, 14, 1, 1, 1, 1, window.shown, false, window.docked, false
 		end
+		-- Opening, closing or selecting a chat window from an addon taints the
+		-- game's chat edit box: only the player may (client.asPlayer), every
+		-- other call is counted in client.addonChatWrites.
+		local function ChatWrite(name)
+			if client.playerActing then return end
+			client.addonChatWrites = (client.addonChatWrites or 0) + 1
+			client.addonChatWriteNames = client.addonChatWriteNames or {}
+			client.addonChatWriteNames[#client.addonChatWriteNames + 1] = name
+		end
+		env.NEW_CHAT_WINDOW = "New Window"
 		-- The first window not in use, cleared, named, docked and selected;
 		-- nothing when all ten are in use.
 		env.FCF_OpenNewWindow = function(name, noDefaultChannels)
+			ChatWrite("FCF_OpenNewWindow")
 			for index = 4, env.NUM_CHAT_WINDOWS do
 				if not ChatActive(index) then
 					local window = client.windows[index] or {}
@@ -588,6 +599,7 @@ function Mock.NewClient(spec)
 			end
 		end
 		env.FCF_Close = function(frame)
+			ChatWrite("FCF_Close")
 			local window = client.windows[frame:GetID()]
 			if not window then return end
 			window.shown, window.docked = false, nil
@@ -595,7 +607,10 @@ function Mock.NewClient(spec)
 			if client.selected == frame then client.selected = env.DEFAULT_CHAT_FRAME end
 		end
 		env.FCFDock_GetSelectedWindow = function() return client.selected end
-		env.FCFDock_SelectWindow = function(_, frame) client.selected = frame end
+		env.FCFDock_SelectWindow = function(_, frame)
+			ChatWrite("FCFDock_SelectWindow")
+			client.selected = frame
+		end
 		-- Chat filters, as the game's chat frame runs them on system lines.
 		env.ChatFrame_AddMessageEventFilter = function(event, fn)
 			local list = client.filters[event] or {}
@@ -935,6 +950,16 @@ function Mock.NewClient(spec)
 
 	function client.slash(text)
 		client.env.SlashCmdList[addon.slash](text)
+	end
+
+	-- What the player does by hand, such as opening or closing a chat window:
+	-- not counted among the addon's chat window writes.
+	function client.asPlayer(fn, ...)
+		client.playerActing = true
+		local ok, result, extra = pcall(fn, ...)
+		client.playerActing = false
+		if not ok then error(result, 2) end
+		return result, extra
 	end
 
 	function client.db() return client.env[addon.savedName] end

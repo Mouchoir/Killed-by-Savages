@@ -66,11 +66,15 @@ of the one named first on the other against the other's on them, in the
 world. A battleground hides whom a member kills, so its kills and deaths
 give no line: the match gives one when it ends, from its scoreboard, "X
 finished a match in Arathi Basin: 12 kills, 3 killing blows, 4 deaths".
-The lines go to a chat tab of their own named "Kills", docked with the
-others, or to the main chat when the second box, "In a chat tab of its
-own", is unticked (or the client has no chat window to spare). Closing the
-tab turns the feed off; unticking the feed, or the tab box, closes the tab
-it opened.
+The lines go to a chat tab named "Kills" when the player has made one
+(right-click the General tab, "New Window", name it Kills), else to the
+main chat, with a line once per session saying how to make the tab; the
+second box, "In the chat tab named Kills", unticked, sends them to the main
+chat anyway. Closing the tab turns the feed off. The addon never opens,
+closes or selects a chat window itself: run from an addon, the game's chat
+window code marks the chat edit box as the addon's, and for the rest of the
+session a group message fails on a secret value and `/invite` is refused as
+a protected call (seen with 1.0.0, fixed in 1.0.1).
 
 A player shows on the players ranking under its display name alone, its
 characters in the tooltip. The name is set in the Me tab: any name, or the

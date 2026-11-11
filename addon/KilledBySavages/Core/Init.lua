@@ -187,9 +187,15 @@ function ns.ToggleWindow()
 	end
 end
 
--- The options are a tab of the board.
+-- The options are a tab of the board. The game's Settings panel closes only
+-- when it is open (its page has a button to the board): HideUIPanel run by
+-- an addon writes the panel manager's state as the addon's, so it is left
+-- alone the rest of the time (minimap right click, /kbs options).
 function ns.OpenOptions()
-	if type(HideUIPanel) == "function" and type(SettingsPanel) == "table" then pcall(HideUIPanel, SettingsPanel) end
+	if type(HideUIPanel) == "function" and type(SettingsPanel) == "table" and SettingsPanel.IsShown
+		and SettingsPanel:IsShown() then
+		pcall(HideUIPanel, SettingsPanel)
+	end
 	ns.UI.Show()
 	ns.UI.SelectTab("options")
 end
