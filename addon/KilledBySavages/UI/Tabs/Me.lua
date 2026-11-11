@@ -160,6 +160,7 @@ ns.UI.RegisterTab({
 		end
 		local kd = sum.deaths > 0 and sum.kills / sum.deaths or sum.kills
 		frame.summary:SetText(L.ME_SUMMARY:format(sum.kills, sum.kb, sum.kills - sum.kb, sum.deaths, Theme.Ratio(kd)))
+		frame.view:SetEmptyText(ns.UI.EmptyText(L.EMPTY_ME, period))
 		frame.view:SetData(rows)
 		Util.Guard("me-boards", ns.UI.RefreshBoards, frame.boards, period, bucket)
 	end,

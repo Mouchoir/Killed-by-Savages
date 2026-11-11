@@ -2594,6 +2594,111 @@ end
 ReviewFixes()
 
 --------------------------------------------------------------------------------
+section("A new week")
+--------------------------------------------------------------------------------
+
+-- The week's counts start again at the server's weekly reset. The board
+-- says since when the week runs next to its number, each period's button
+-- says its dates on hover, and an empty week in a guild that has a history
+-- says that the counts started again and where the rest is.
+local function NewWeek()
+	local ns, L = A.ns, A.ns.L
+	local db = A.db()
+	local keep = db.weekAnchor
+	local week = 7 * 86400
+	-- The reset is this very second: everything recorded is last week's or older.
+	local reset = Mock.Server()
+	db.weekAnchor = reset
+	ns.Stats.Invalidate()
+	ns.UI.Show()
+	ns.UI.SetBucket("all")
+	ns.UI.SetPeriod("week")
+	ns.UI.SelectTab("players")
+	local board = ns.UI.Frame()
+	local day = os.date("%A", reset)
+	if L.DATE_WEEKDAY_LOWER == "1" then day = day:lower() end
+	check("an instant reads as a weekday, a date and a time",
+		ns.Theme.DayTime(reset) == L.DATE_DAY_TIME:format(day, os.date("%d/%m", reset), os.date("%H:%M", reset)), ns.Theme.DayTime(reset))
+	-- The board shows a reset to the nearest minute: the client's count of
+	-- seconds left lands a second short of the hour now and then.
+	local function Minute(t) return math.floor((t + 30) / 60) * 60 end
+	local began = ns.Theme.DayTime(Minute(reset))
+	local newWeek = L.EMPTY_NEW_WEEK:format(began, L.PERIOD_LAST, L.PERIOD_ALL)
+	db.weekAnchor = Minute(reset) + 3600 - 1
+	check("a reset a second short of the hour reads as the hour", ns.UI.PeriodText("week") == L.PERIOD_SINCE:format(ns.Theme.DayTime(Minute(reset) + 3600 - 7 * 86400)),
+		ns.UI.PeriodText("week"))
+	db.weekAnchor = reset
+	local list = board.tabFrames.players.view
+	check("a week that just began is empty, and says when the counts started again and where the rest is",
+		#Rows(list) == 0 and list.empty.shown == true and list.empty.text == newWeek, list.empty.text)
+	check("the header says since when the week runs", board.band.since.text == L.PERIOD_SINCE:format(began), board.band.since.text)
+	local said = true
+	for _, key in ipairs({ "characters", "guild", "me" }) do
+		ns.UI.SelectTab(key)
+		if board.tabFrames[key].view.empty.text ~= newWeek then said = false end
+	end
+	ns.UI.SelectTab("hunt")
+	local hunt = board.tabFrames.hunt
+	check("every list says it: characters, guild feed, my characters, the hunting boards and my own",
+		said and hunt.victims.empty.text == newWeek and hunt.killers.empty.text == newWeek
+		and board.tabFrames.me.boards.victims.empty.text == newWeek and board.tabFrames.me.boards.killers.empty.text == newWeek)
+
+	-- On hover of the period buttons.
+	local function TipOf(button)
+		button:GetScript("OnEnter")(button)
+		local lines = A.env.GameTooltip.tooltipLines or {}
+		return lines[1], lines[2]
+	end
+	local title, body = TipOf(board.band.periods.buttons[1])
+	check("the week's button says on hover since when it runs and when it starts again",
+		title == L.PERIOD_WEEK and body == L.PERIOD_WEEK_TIP:format(began, ns.Theme.DayTime(Minute(reset + week))), body)
+	ns.UI.SelectTab("players")
+	ns.UI.SetPeriod("last")
+	title, body = TipOf(board.band.periods.buttons[2])
+	check("last week holds what came before the reset, with its dates in the header and on hover",
+		#Rows(list) >= 1 and board.band.since.text == L.PERIOD_RANGE:format(ns.Theme.Day(Minute(reset - week)), ns.Theme.Day(Minute(reset)))
+		and title == L.PERIOD_LAST and body == L.PERIOD_LAST_TIP:format(ns.Theme.DayTime(Minute(reset - week)), began),
+		board.band.since.text)
+	ns.UI.SetPeriod("all")
+	title, body = TipOf(board.band.periods.buttons[3])
+	check("all time has no dates", board.band.since.text == "" and title == L.PERIOD_ALL and body == L.PERIOD_ALL_TIP, board.band.since.text)
+
+	-- A guild with nothing at all, or another period, keeps the plain words.
+	local realGuild = ns.Stats.Guild
+	ns.Stats.Guild = function() return { kills = 0, deaths = 0 } end
+	local plain = ns.UI.EmptyText(L.EMPTY_PLAYERS, "week")
+	ns.Stats.Guild = realGuild
+	check("a guild with no history keeps the plain words, as does any other period",
+		plain == L.EMPTY_PLAYERS and ns.UI.EmptyText(L.EMPTY_PLAYERS, "last") == L.EMPTY_PLAYERS
+		and ns.UI.EmptyText(L.EMPTY_FEED, "week") == newWeek)
+	db.weekAnchor = keep
+	ns.Stats.Invalidate()
+	ns.UI.SetPeriod("week")
+	ns.UI.Hide()
+
+	-- The count of a full bar: "2 of 4" when it fits between the last
+	-- toggle and the clear button, else "2/4", else nothing, never a text
+	-- that runs under a button.
+	local bar = ns.Filters.New(A.env.CreateFrame("Frame"), { search = true, classes = true, levels = true, roles = true }, nil, nil)
+	bar.searchBox:SetText("a")
+	bar:SetCount(2, 4)
+	local unmeasured = bar.count.text
+	bar.lastPart.GetRight = function() return 700 end
+	bar.count.GetStringWidth = function(self) return #self.text * 6 end
+	local forms = {}
+	for _, left in ipairs({ 760, 740, 720 }) do
+		bar.reset.GetLeft = function() return left end
+		bar:SetCount(2, 4)
+		forms[#forms + 1] = bar.count.text
+	end
+	check("the count shortens, then goes, when the room before the clear button runs out",
+		unmeasured == L.FILTER_COUNT:format(2, 4) and forms[1] == L.FILTER_COUNT:format(2, 4)
+		and forms[2] == L.FILTER_COUNT_SHORT:format(2, 4) and forms[3] == "" and bar.count.shown == true,
+		table.concat(forms, " | "))
+end
+NewWeek()
+
+--------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")
 --------------------------------------------------------------------------------
 

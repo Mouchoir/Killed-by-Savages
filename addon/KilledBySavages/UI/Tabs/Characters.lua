@@ -50,7 +50,7 @@ ns.UI.RegisterTab({
 		frame.Fill = function()
 			local rows = frame.rows or {}
 			frame.filters:SetClasses(rows)
-			local shown = Filters.Fill(frame.filters, frame.view, rows, L.EMPTY_PLAYERS)
+			local shown = Filters.Fill(frame.filters, frame.view, rows, ns.UI.EmptyText(L.EMPTY_PLAYERS, frame.period))
 			frame.filters:SetCount(#shown, #rows)
 		end
 		frame.filters = Filters.New(frame, { search = true, classes = true, levels = true, roles = true,
@@ -81,7 +81,7 @@ ns.UI.RegisterTab({
 			row.player = players[row.playerKey or ("char:" .. row.guid)]
 			row.roleText = Filters.ROLE_TEXT[row.role] or ""
 		end
-		frame.rows = rows
+		frame.rows, frame.period = rows, period
 		frame.Fill()
 	end,
 })

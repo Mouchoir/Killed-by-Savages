@@ -41,7 +41,7 @@ ns.UI.RegisterTab({
 	Build = function(frame)
 		frame.Fill = function()
 			local rows = frame.rows or {}
-			local shown = Filters.Fill(frame.filters, frame.view, rows, L.EMPTY_PLAYERS)
+			local shown = Filters.Fill(frame.filters, frame.view, rows, ns.UI.EmptyText(L.EMPTY_PLAYERS, frame.period))
 			frame.filters:SetCount(#shown, #rows)
 		end
 		frame.filters = Filters.New(frame, { search = true, searchTip = L.FILTER_SEARCH_TIP_PLAYERS }, { names = Names },
@@ -61,7 +61,7 @@ ns.UI.RegisterTab({
 		frame.view.panel:SetPoint("BOTTOMRIGHT", 0, 0)
 	end,
 	Refresh = function(frame, period, bucket)
-		frame.rows = Stats.Players(period, bucket)
+		frame.rows, frame.period = Stats.Players(period, bucket), period
 		frame.Fill()
 	end,
 })

@@ -11,6 +11,7 @@ local _, ns = ...
 --------------------------------------------------------------------------------
 
 local Util = ns.Util
+local L = ns.L
 
 local Theme = {}
 ns.Theme = Theme
@@ -290,6 +291,27 @@ function Theme.Time(t)
 	return format("%d/%m %H:%M", t)
 end
 
+-- A day as the board writes it, and a day with its name and the time:
+-- "Wednesday 11/11 at 04:59", in the client's language and the player's
+-- local time. The weekly reset is a server instant; said this way it reads
+-- the same for everyone in the guild's time zone.
+local WEEKDAYS = { "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY" }
+
+function Theme.Day(t)
+	local format = Util.Fn(date)
+	if type(t) ~= "number" or not format then return "" end
+	return format("%d/%m", t)
+end
+
+function Theme.DayTime(t)
+	local format = Util.Fn(date)
+	if type(t) ~= "number" or not format then return "" end
+	local name = _G["WEEKDAY_" .. tostring(WEEKDAYS[(tonumber(format("%w", t)) or 0) + 1])]
+	if type(name) ~= "string" or name == "" then name = format("%A", t) end
+	if L.DATE_WEEKDAY_LOWER == "1" then name = name:lower() end
+	return L.DATE_DAY_TIME:format(name, format("%d/%m", t), format("%H:%M", t))
+end
+
 function Theme.ZoneName(mapID)
 	if type(mapID) ~= "number" or not (C_Map and Util.Fn(C_Map.GetMapInfo)) then return nil end
 	local ok, info = pcall(C_Map.GetMapInfo, mapID)
@@ -326,4 +348,18 @@ end
 
 function Theme.TooltipHide()
 	if GameTooltip then GameTooltip:Hide() end
+end
+
+-- A tooltip on hover: a title and a line under it, each a text or a
+-- function of the region that gives one when the mouse comes.
+function Theme.Tip(region, title, text)
+	region:SetScript("OnEnter", function(self)
+		local name = type(title) == "function" and title(self) or title
+		if name and Theme.TooltipStart(self, name) then
+			local line = type(text) == "function" and text(self) or text
+			if line then Theme.TooltipLine(line) end
+			Theme.TooltipShow()
+		end
+	end)
+	region:SetScript("OnLeave", function() Theme.TooltipHide() end)
 end

@@ -47,16 +47,7 @@ local function SmallButton(parent, text, width)
 end
 Filters.SmallButton = SmallButton
 
-local function Tip(region, title, text)
-	region:SetScript("OnEnter", function(self)
-		local name = type(title) == "function" and title(self) or title
-		if name and Theme.TooltipStart(self, name) then
-			if text then Theme.TooltipLine(text) end
-			Theme.TooltipShow()
-		end
-	end)
-	region:SetScript("OnLeave", function() Theme.TooltipHide() end)
-end
+local Tip = Theme.Tip
 Filters.Tip = Tip
 
 -- parts: { search = true, classes = true, levels = true, roles = true },
@@ -116,7 +107,7 @@ function Filters.New(parent, parts, read, onChange)
 		-- The client's search box brings its magnifier, its greyed
 		-- instructions and its clear button; a plain input box otherwise,
 		-- with instructions of our own.
-		local box = EditBox({ "SearchBoxTemplate", "InputBoxTemplate" }, 170, 24)
+		local box = EditBox({ "SearchBoxTemplate", "InputBoxTemplate" }, 156, 24)
 		Place(box, 6)
 		local instructions = type(box.Instructions) == "table" and box.Instructions or nil
 		if instructions then
@@ -146,7 +137,7 @@ function Filters.New(parent, parts, read, onChange)
 		-- One icon per class on the list, set by SetClasses.
 		local strip = CreateFrame("Frame", nil, frame)
 		strip:SetSize(ICON, HEIGHT)
-		Place(strip, 14)
+		Place(strip, 10)
 		bar.classStrip = strip
 	end
 
@@ -180,9 +171,9 @@ function Filters.New(parent, parts, read, onChange)
 		local label = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 		label:SetText(L.FILTER_LEVEL)
 		label:SetTextColor(Theme.Color("muted"))
-		Place(label, 14)
+		Place(label, 10)
 		local function LevelBox()
-			local box = EditBox({ "InputBoxTemplate" }, 30, 3)
+			local box = EditBox({ "InputBoxTemplate" }, 28, 3)
 			if box.SetNumeric then box:SetNumeric(true) end
 			if box.SetJustifyH then box:SetJustifyH("CENTER") end
 			box:HookScript("OnTextChanged", function()
@@ -207,8 +198,8 @@ function Filters.New(parent, parts, read, onChange)
 
 	if parts.roles then
 		for index, role in ipairs(Identity.ROLES) do
-			local button = SmallButton(frame, ROLE_TEXT[role], 54)
-			Place(button, index == 1 and 14 or 3)
+			local button = SmallButton(frame, ROLE_TEXT[role], 48)
+			Place(button, index == 1 and 10 or 3)
 			button:SetScript("OnClick", function()
 				bar.roles[role] = (not bar.roles[role]) or nil
 				Changed()
@@ -217,6 +208,9 @@ function Filters.New(parent, parts, read, onChange)
 			bar.roleButtons[role] = button
 		end
 	end
+
+	-- The last part placed from the left: the count must not run under it.
+	bar.lastPart = last
 
 	-- At the right end, while something is set: how many rows are left, and
 	-- a button that clears it all.
@@ -327,13 +321,24 @@ function Filters.New(parent, parts, read, onChange)
 	end
 
 	-- "3 of 42", next to the clear button, while a filter is set.
+	-- On a full bar (the characters') the room between the last toggle and
+	-- the clear button is short, and a text that runs under a button is a
+	-- text nobody reads: "6 of 22" when it fits, else "6/22", else nothing.
 	function bar:SetCount(shown, total)
-		if self:Active() and type(shown) == "number" and type(total) == "number" then
-			self.count:SetText(L.FILTER_COUNT:format(shown, total))
-			self.count:Show()
-		else
+		if not (self:Active() and type(shown) == "number" and type(total) == "number") then
 			self.count:Hide()
+			return
 		end
+		self.count:Show()
+		local edge = self.lastPart and self.lastPart.GetRight and self.lastPart:GetRight()
+		local limit = self.reset.GetLeft and self.reset:GetLeft()
+		local room = type(edge) == "number" and type(limit) == "number" and (limit - 8 - edge - 6) or nil
+		for _, form in ipairs({ L.FILTER_COUNT, L.FILTER_COUNT_SHORT }) do
+			self.count:SetText(form:format(shown, total))
+			local width = self.count.GetStringWidth and self.count:GetStringWidth()
+			if not room or type(width) ~= "number" or width <= room then return end
+		end
+		self.count:SetText("")
 	end
 
 	function bar:Reset()

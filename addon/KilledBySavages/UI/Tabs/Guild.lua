@@ -73,6 +73,7 @@ ns.UI.RegisterTab({
 			if milestone.distinct >= step then reached[#reached + 1] = Theme.Number(step) end
 		end
 		frame.milestones:SetText(#reached > 0 and L.GUILD_MILESTONES_REACHED:format(table.concat(reached, ", ")) or L.GUILD_NO_MILESTONE)
+		frame.view:SetEmptyText(ns.UI.EmptyText(L.EMPTY_FEED, period))
 		frame.view:SetData(FeedRows(period, bucket))
 	end,
 })

@@ -111,6 +111,17 @@ local L = {
 	EMPTY_KILLERS = "No death yet for this period. The enemies who kill us most often will show here.",
 	EMPTY_ME = "No kill on your characters yet for this period.",
 	EMPTY_FILTERED = "Nothing matches the search or the filters.",
+	EMPTY_NEW_WEEK = "Nothing yet this week: the counts started again on %s. Everything before is under \"%s\" and \"%s\".",
+
+	-- Periods: when the week runs from, and when it starts again
+	PERIOD_SINCE = "since %s",
+	PERIOD_RANGE = "from %s to %s",
+	PERIOD_WEEK_TIP = "Since %s. The week's counts start again at every weekly reset: next on %s.",
+	PERIOD_LAST_TIP = "From %s to %s.",
+	PERIOD_ALL_TIP = "Everything the addon has counted. It never starts again.",
+	DATE_DAY_TIME = "%s %s at %s",
+	DATE_WEEKDAY_LOWER = "0",
+	FILTER_COUNT_SHORT = "%d/%d",
 
 	-- The bar above a list
 	FILTER_SEARCH = "Search a name",
@@ -284,6 +295,15 @@ local translations = {
 		EMPTY_KILLERS = "Aucune mort sur cette période. Les ennemis qui nous tuent le plus souvent s'afficheront ici.",
 		EMPTY_ME = "Aucun kill sur tes personnages pour cette période.",
 		EMPTY_FILTERED = "Rien ne correspond à la recherche ou aux filtres.",
+		EMPTY_NEW_WEEK = "Rien encore cette semaine : les compteurs sont repartis de zéro %s. Tout ce qui précède est dans « %s » et « %s ».",
+		PERIOD_SINCE = "depuis %s",
+		PERIOD_RANGE = "du %s au %s",
+		PERIOD_WEEK_TIP = "Depuis %s. Les compteurs de la semaine repartent de zéro à chaque reset hebdomadaire : le prochain %s.",
+		PERIOD_LAST_TIP = "Du %s au %s.",
+		PERIOD_ALL_TIP = "Tout ce que l'addon a compté. Ne repart jamais de zéro.",
+		DATE_DAY_TIME = "%s %s à %s",
+		DATE_WEEKDAY_LOWER = "1",
+		FILTER_COUNT_SHORT = "%d/%d",
 		FILTER_SEARCH = "Rechercher un nom",
 		FILTER_SEARCH_TIP = "N'importe quel bout du nom, sans tenir compte des majuscules ni des accents.",
 		FILTER_SEARCH_TIP_PLAYERS = "N'importe quel bout du nom du joueur ou de celui d'un de ses personnages, sans tenir compte des majuscules ni des accents.",

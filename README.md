@@ -90,9 +90,19 @@ an enemy on both boards. The Characters tab adds an icon per class on the
 list, two level bounds (the levels are the guild roster's) and the three
 roles; the Hunt tab the classes. Several classes or roles can be chosen at
 once, "Clear" takes everything off, and the bar says how many rows are left
-of how many. A row a filter cannot judge (no level known, no role chosen)
+of how many ("6 of 22", "6/22" where the room is short, nothing where there
+is none). A row a filter cannot judge (no level known, no role chosen)
 is left out while that filter is set. There is no dropdown anywhere: the
 client's own trips a menu assertion on Forever.
+
+The week shown starts at the server's weekly reset, where its counts start
+again, and the board says so rather than leave an empty list to be wondered
+at. Next to the big number: since when the week runs ("since Wednesday
+11/11 at 05:00"), or the dates of last week. On hover of a period's button:
+its dates in full and, for the week, when it starts again. In place of an
+empty list, in a guild that has a history: that the counts started again,
+when, and that what came before is under "Last week" and "All time". Reset
+times are shown to the nearest minute, in the player's local time.
 
 The role (tank, healer, damage) is what each player says its character
 plays, chosen with three buttons in the Me tab and sent with the profile;

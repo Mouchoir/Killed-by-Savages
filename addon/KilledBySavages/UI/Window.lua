@@ -74,6 +74,40 @@ function UI.SyncText(status)
 	return L.SYNC_IDLE:format(status.held or 0, status.peers or 0)
 end
 
+-- The reset is known from the seconds the client says are left before it,
+-- which lands a second short of the hour now and then: shown to the minute
+-- nearest, so "04:59" reads "05:00".
+local function Minute(t)
+	return type(t) == "number" and math.floor((t + 30) / 60) * 60 or nil
+end
+
+-- The period shown, in a few words next to the big number: since when this
+-- week runs, from when to when last week ran. Nothing for all time.
+function UI.PeriodText(period)
+	local from, to = Stats.PeriodRange(period)
+	if period == "week" then return L.PERIOD_SINCE:format(Theme.DayTime(Minute(from))) end
+	if period == "last" then return L.PERIOD_RANGE:format(Theme.Day(Minute(from)), Theme.Day(Minute(to))) end
+	return ""
+end
+
+-- The same in full, on hover of a period's button, with the next reset.
+function UI.PeriodTip(period)
+	local from, to, reset = Stats.PeriodRange(period)
+	if period == "week" then return L.PERIOD_WEEK_TIP:format(Theme.DayTime(Minute(from)), Theme.DayTime(Minute(reset))) end
+	if period == "last" then return L.PERIOD_LAST_TIP:format(Theme.DayTime(Minute(from)), Theme.DayTime(Minute(to))) end
+	return L.PERIOD_ALL_TIP
+end
+
+-- What an empty list says. This week with nothing in it yet, in a guild
+-- that has a history, is a week that just started again: said so, with
+-- where the rest went, rather than "no kill yet".
+function UI.EmptyText(text, period)
+	if period ~= "week" then return text end
+	local ever = Stats.Guild("all", "all")
+	if (ever.kills or 0) + (ever.deaths or 0) == 0 then return text end
+	return L.EMPTY_NEW_WEEK:format(Theme.DayTime(Minute((Stats.PeriodRange("week")))), L.PERIOD_LAST, L.PERIOD_ALL)
+end
+
 -- The players on an older addon than the newest release, on hover of the
 -- notice: name, version, and online or when last heard from.
 local function ShowOutdated(self)
@@ -267,6 +301,12 @@ local function BuildShell()
 	label:SetTextColor(Theme.Color("head"))
 	label:SetText(L.HEADER_ENEMIES_KILLED)
 	band.label = label
+	-- Since when the period shown runs: the week starts again at the
+	-- server's weekly reset, and a board back at zero has to say so.
+	local since = band:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	since:SetPoint("BOTTOMLEFT", label, "BOTTOMRIGHT", 8, 1)
+	since:SetTextColor(Theme.Color("muted"))
+	band.since = since
 
 	-- The milestone bar: the honor bar of the PvP queue when the client has
 	-- it, else a leather box with the same gold fill.
@@ -316,6 +356,9 @@ local function BuildShell()
 	}, 100, function(value) UI.SetPeriod(value) end)
 	periods.buttons[1]:SetPoint("TOPRIGHT", band, "TOPRIGHT", -(periods:Width() - periods.buttons[1]:GetWidth()), 0)
 	band.periods = periods
+	for _, button in ipairs(periods.buttons) do
+		Theme.Tip(button, function(self) return self.label:GetText() end, function(self) return UI.PeriodTip(self.value) end)
+	end
 	local buckets = Theme.ButtonGroup(band, {
 		{ value = "w", text = L.BUCKET_WORLD, width = 96 },
 		{ value = "b", text = L.BUCKET_BG, width = 116 },
@@ -417,6 +460,7 @@ local function RefreshBand()
 	bar.text:SetText(L.MILESTONE_FORMAT:format(milestone.distinct, milestone.next))
 	frame.band.periods:Select(state.period)
 	frame.band.buckets:Select(state.bucket)
+	frame.band.since:SetText(UI.PeriodText(state.period))
 	-- The guild's name follows the title, unless the title already says it.
 	local guildName = ns.Identity.me.guild
 	if type(guildName) ~= "string" or guildName == "" or L.ADDON_NAME:lower():find(guildName:lower(), 1, true) then

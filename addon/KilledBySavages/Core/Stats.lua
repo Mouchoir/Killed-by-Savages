@@ -62,6 +62,15 @@ function Stats.WeekStart(index)
 	return Stats.Anchor() + index * WEEK
 end
 
+-- When a period starts and ends, in server time, and for the running week
+-- when its counts start again. All time has neither start nor end.
+function Stats.PeriodRange(period)
+	local current = Stats.CurrentWeek()
+	if period == "week" then return Stats.WeekStart(current), nil, Stats.WeekStart(current + 1) end
+	if period == "last" then return Stats.WeekStart(current - 1), Stats.WeekStart(current), nil end
+	return nil, nil, nil
+end
+
 local function InPeriod(period, week, current)
 	if period == "all" then return true end
 	if period == "week" then return week == current end

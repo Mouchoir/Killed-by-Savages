@@ -40,7 +40,11 @@ end
 local function ShowBoards(frame)
 	local victims, killers = frame.victimRows or {}, frame.killerRows or {}
 	local bar = frame.filters
+	local noVictims = ns.UI.EmptyText(L.EMPTY_HUNT, frame.period)
+	local noKillers = ns.UI.EmptyText(L.EMPTY_KILLERS, frame.period)
 	if not bar then
+		frame.victims:SetEmptyText(noVictims)
+		frame.killers:SetEmptyText(noKillers)
 		frame.victims:SetData(victims)
 		frame.killers:SetData(killers)
 		return
@@ -49,8 +53,8 @@ local function ShowBoards(frame)
 	for _, row in ipairs(victims) do all[#all + 1] = row end
 	for _, row in ipairs(killers) do all[#all + 1] = row end
 	bar:SetClasses(all)
-	local shownVictims = Filters.Fill(bar, frame.victims, victims, L.EMPTY_HUNT)
-	local shownKillers = Filters.Fill(bar, frame.killers, killers, L.EMPTY_KILLERS)
+	local shownVictims = Filters.Fill(bar, frame.victims, victims, noVictims)
+	local shownKillers = Filters.Fill(bar, frame.killers, killers, noKillers)
 	bar:SetCount(#shownVictims + #shownKillers, #all)
 end
 
@@ -97,6 +101,7 @@ local function RefreshBoards(frame, period, bucket)
 	local filter = frame.filterFn and frame.filterFn() or nil
 	frame.victimRows = VictimRows(period, bucket, filter)
 	frame.killerRows = KillerRows(period, bucket, filter)
+	frame.period = period
 	ShowBoards(frame)
 end
 ns.UI.RefreshBoards = RefreshBoards
