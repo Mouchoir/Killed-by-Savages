@@ -1,7 +1,8 @@
 local _, ns = ...
 
 --------------------------------------------------------------------------------
--- Me tab: my display name, my characters, my own hunting board.
+-- Me tab: my display name, the role of this character, my characters, my
+-- own hunting board.
 --------------------------------------------------------------------------------
 
 local Util = ns.Util
@@ -9,6 +10,7 @@ local Theme = ns.Theme
 local Stats = ns.Stats
 local ListView = ns.ListView
 local Identity = ns.Identity
+local Filters = ns.Filters
 local L = ns.L
 
 local CHARACTER_ROWS = 5          -- rows shown for my characters before scrolling
@@ -80,8 +82,39 @@ ns.UI.RegisterTab({
 		hint:SetJustifyH("LEFT")
 		hint:SetTextColor(Theme.Color("muted"))
 		hint:SetText(L.ME_ALIAS_HINT)
+		-- The role this character plays, at the right end of the summary's
+		-- line: one of three, chosen by its player; the chosen one again
+		-- removes it. It shows on the characters ranking and feeds its
+		-- role filter.
+		frame.roleButtons = {}
+		local previous
+		for index = #Identity.ROLES, 1, -1 do
+			local role = Identity.ROLES[index]
+			local button = Filters.SmallButton(frame, Filters.ROLE_TEXT[role], 60)
+			if previous then
+				button:SetPoint("RIGHT", previous, "LEFT", -3, 0)
+			else
+				button:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -30)
+			end
+			button:SetScript("OnClick", function()
+				Identity.SetRole(Identity.Role() ~= role and role or nil)
+				ns.UI.Refresh()
+			end)
+			Filters.Tip(button, Filters.ROLE_TEXT[role], L.ME_ROLE_TIP)
+			frame.roleButtons[role] = button
+			previous = button
+		end
+		local roleLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+		roleLabel:SetPoint("RIGHT", previous, "LEFT", -8, 0)
+		roleLabel:SetTextColor(Theme.Color("title"))
+		roleLabel:SetText(L.ME_ROLE_LABEL)
+		-- The summary ends before the role's label: three buttons of 60 px,
+		-- 3 px apart, 4 px from the edge, the label 8 px before them.
 		local summary = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 		summary:SetPoint("TOPLEFT", 4, -34)
+		summary:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(4 + 3 * 60 + 2 * 3 + 8 + roleLabel:GetStringWidth() + 12), -34)
+		summary:SetJustifyH("LEFT")
+		summary:SetWordWrap(false)
 		summary:SetTextColor(Theme.Color("text"))
 		frame.summary = summary
 
@@ -118,6 +151,8 @@ ns.UI.RegisterTab({
 	Refresh = function(frame, period, bucket)
 		if not frame.box:HasFocus() then frame.box:SetText(Identity.Alias() or "") end
 		frame.UpdateApply()
+		local myRole = Identity.Role()
+		for role, button in pairs(frame.roleButtons) do button:SetSelected(role == myRole) end
 		local rows = MyCharacters(period, bucket)
 		local sum = { kills = 0, kb = 0, deaths = 0 }
 		for _, row in ipairs(rows) do

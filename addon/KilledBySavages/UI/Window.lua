@@ -24,6 +24,7 @@ local BAND = 48
 local FOOTER = 14
 local NAME = "KilledBySavagesFrame"
 local ROSTER_REFRESH = 60         -- seconds between guild roster requests while the board is open
+local OUTDATED_REFRESH = 15       -- seconds between two looks at who is outdated, when nothing said it changed
 
 UI.tabs = {}
 UI.tabOrder = {}
@@ -136,12 +137,20 @@ local function RefreshOutdated()
 	frame.footer:SetPoint("BOTTOMRIGHT", notice, "BOTTOMLEFT", -12, 0)
 end
 
-local function RefreshFooter()
+-- The sync line every time; the outdated notice, a pass over the whole
+-- roster, only when something said it may have changed (now), or once in a
+-- while: the footer ticks every second while the board is open.
+local outdatedAt
+local function RefreshFooter(now)
 	if not frame or not frame.footer or not ns.Sync then return end
 	local status = ns.Sync.Status()
 	frame.footer:SetText(UI.SyncText(status))
 	frame.footer:SetTextColor(Theme.Color(status.phase == "busy" and "title" or "muted"))
-	Util.Guard("outdated", RefreshOutdated)
+	local clock = Util.Clock()
+	if now or not outdatedAt or clock - outdatedAt >= OUTDATED_REFRESH then
+		outdatedAt = clock
+		Util.Guard("outdated", RefreshOutdated)
+	end
 end
 
 local function BuildShell()
@@ -419,7 +428,7 @@ end
 function UI.Refresh()
 	if not frame or not frame:IsShown() then return end
 	Util.Guard("band", RefreshBand)
-	Util.Guard("footer", RefreshFooter)
+	Util.Guard("footer", RefreshFooter, true)
 	local tabFrame = TabFrame(state.tab)
 	local definition = UI.tabs[state.tab]
 	if tabFrame and definition then
@@ -521,9 +530,14 @@ local function FooterNow()
 	if frame and frame:IsShown() then Util.Guard("footer", RefreshFooter) end
 end
 
+-- A hello, a profile or a presence message: who is outdated may have changed.
+local function OutdatedNow()
+	if frame and frame:IsShown() then Util.Guard("footer", RefreshFooter, true) end
+end
+
 ns.Hook("StatsChanged", QueueRefresh)
 ns.Hook("RosterUpdated", QueueRefresh)
 ns.Hook("SettingsChanged", QueueRefresh)
 ns.Hook("SyncChanged", FooterNow)
-ns.Hook("PeerSeen", FooterNow)
-ns.Hook("PresenceChanged", FooterNow)
+ns.Hook("PeerSeen", OutdatedNow)
+ns.Hook("PresenceChanged", OutdatedNow)

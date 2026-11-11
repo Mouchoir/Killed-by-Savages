@@ -27,6 +27,7 @@ local function HasScrollBox()
 end
 
 -- Column: { key, title, width, align = "LEFT"|"RIGHT", sort = "number"|"text", icon = "class"|"race",
+--   sortBy = the row field to sort on when it is not the one shown (a time shown as text),
 --   classColor = true (the row's class) or the row field holding the class file to colour the cell with,
 --   tip = a line under the header's name when the mouse rests on it,
 --   button = { text, onClick = fn(data), selected = fn(data), selectedText }: an action on the row's
@@ -72,6 +73,7 @@ function ListView.New(parent, columns, options)
 					view.sortKey = column.key
 					view.sortDesc = column.sort == "number"
 				end
+				view.sortField = column.sortBy or column.key
 				view:Refresh()
 			end)
 		end
@@ -85,6 +87,7 @@ function ListView.New(parent, columns, options)
 			header:SetScript("OnLeave", function() Theme.TooltipHide() end)
 		end
 		view.headers[index] = header
+		if column.key == view.sortKey then view.sortField = column.sortBy or column.key end
 		x = x + column.width
 	end
 
@@ -276,7 +279,7 @@ function ListView.New(parent, columns, options)
 	function view:Refresh()
 		local list = self.data
 		if self.sortKey then
-			local key, desc = self.sortKey, self.sortDesc
+			local key, desc = self.sortField or self.sortKey, self.sortDesc
 			table.sort(list, function(a, b)
 				local va, vb = a[key], b[key]
 				if type(va) == "number" and type(vb) == "number" then

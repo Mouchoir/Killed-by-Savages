@@ -33,6 +33,7 @@ Core\Stats.lua
 Core\Import.lua
 UI\Theme.lua
 UI\ListView.lua
+UI\Filters.lua
 UI\Window.lua
 UI\Tabs\Players.lua
 UI\Tabs\Characters.lua

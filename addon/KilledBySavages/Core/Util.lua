@@ -138,6 +138,27 @@ function Util.Cut(text, max)
 	return text:sub(1, stop), text:sub(stop + 1)
 end
 
+-- A name as a search compares it: lower case, accents and ligatures taken
+-- off, so "sor" finds "Søren" and "MELI" finds "Méliné". Latin letters
+-- only, which is what Forever names are made of; anything else stays as is.
+local FOLD = {}
+do
+	local letters = {
+		a = "àáâãäåāăąÀÁÂÃÄÅĀĂĄ", c = "çćĉċčÇĆĈĊČ", d = "ďđĎĐ", e = "èéêëēĕėęěÈÉÊËĒĔĖĘĚ", g = "ĝğġģĜĞĠĢ", h = "ĥħĤĦ",
+		i = "ìíîïĩīĭįıÌÍÎÏĨĪĬĮİ", j = "ĵĴ", k = "ķĶ", l = "ĺļľŀłĹĻĽĿŁ", n = "ñńņňÑŃŅŇ", o = "òóôõöøōŏőÒÓÔÕÖØŌŎŐ",
+		r = "ŕŗřŔŖŘ", s = "śŝşšŚŜŞŠ", t = "ţťŧŢŤŦ", u = "ùúûüũūŭůűųÙÚÛÜŨŪŬŮŰŲ", w = "ŵŴ", y = "ýÿŷÝŸŶ", z = "źżžŹŻŽ",
+		ae = "æÆ", oe = "œŒ", ss = "ß", th = "þÞ",
+	}
+	for plain, accented in pairs(letters) do
+		for character in accented:gmatch("[\195-\197][\128-\191]") do FOLD[character] = plain end
+	end
+end
+
+function Util.Fold(text)
+	if type(text) ~= "string" or text == SECRET then return "" end
+	return (text:lower():gsub("[\195-\197][\128-\191]", FOLD))
+end
+
 -- Records use ';' between fields and messages use '^'; names and zone texts
 -- never need those characters, nor UI escapes, so they are flattened.
 function Util.Clean(value)

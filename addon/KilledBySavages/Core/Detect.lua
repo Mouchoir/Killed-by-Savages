@@ -113,10 +113,19 @@ function Detect.OnPartyKill(attackerGuid, targetGuid)
 		ns.Count("detect.killByOther")
 		return
 	end
+	-- Only an enemy gives an honorable kill: a player of our own faction
+	-- killed where everyone fights everyone would otherwise be named as
+	-- the victim of an HK that came for someone else at that moment.
+	local facts = Identity.PlayerFacts(targetGuid)
+	local faction = Identity.FactionOf(facts)
+	if faction ~= nil and Identity.me.enemyFaction ~= nil and faction ~= Identity.me.enemyFaction then
+		ns.Count("detect.killNotEnemy")
+		return
+	end
 	Trim(recentKills)
 	recentKills[#recentKills + 1] = {
 		at = Util.Now(), clock = Util.Clock(), role = role, guid = targetGuid,
-		facts = Identity.PlayerFacts(targetGuid), pos = Util.Position(),
+		facts = facts, pos = Util.Position(),
 	}
 	ns.Count("detect.kill." .. role)
 end

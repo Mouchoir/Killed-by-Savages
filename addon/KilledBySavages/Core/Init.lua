@@ -142,6 +142,13 @@ local function Debug()
 	ns.Print(L.DEBUG_HEADER:format(ns.VERSION))
 	ns.Print(("character %s (%s) guid %s key %s"):format(tostring(me.name), tostring(me.class), tostring(me.guid), tostring(me.playerKey)))
 	ns.Print(("guild %s rank %s (%s) officer %s"):format(tostring(me.guild), tostring(me.rankName), tostring(me.rankIndex), tostring(ns.Identity.IsOfficer())))
+	-- What the client says of a spec and a role: the role is chosen in the
+	-- Me tab for now; these readings tell whether it could be read instead.
+	local specInfo = type(C_SpecializationInfo) == "table" and C_SpecializationInfo or {}
+	local spec = Util.Get(Util.Fn(specInfo.GetSpecialization) or Util.Fn(GetSpecialization))
+	local specRole = type(spec) == "number" and Util.Get(Util.Fn(specInfo.GetSpecializationRole) or Util.Fn(GetSpecializationRole), spec) or nil
+	ns.Print(("role chosen %s; client: spec %s, spec role %s, group role %s"):format(tostring(ns.Identity.Role()),
+		tostring(spec), tostring(specRole), tostring(Util.Get(Util.Fn(UnitGroupRolesAssigned), "player"))))
 	local officer = ns.db.debug.officerFlag
 	if officer then
 		ns.Print(("officer flag check: client says %s, flag %d says %s, true flags [%s]"):format(

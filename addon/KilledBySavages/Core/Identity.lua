@@ -43,8 +43,12 @@ local function PlainGuid(unit)
 end
 Identity.PlainGuid = PlainGuid
 
+-- The realm names a name may end with, kept between calls: Canon runs once
+-- per roster member and several times per addon message.
+local realms = {}
+
 function Identity.Canon(name)
-	return Util.Canon(name, { me.realm, me.realmName })
+	return Util.Canon(name, realms)
 end
 
 -- Whether the BattleTag is readable, and its salted hash. Only the hash is
@@ -73,6 +77,10 @@ function Identity.Refresh()
 	me.surname = hasSurname and surname or nil
 	me.realm = Get(GetNormalizedRealmName) or Get(GetRealmName)
 	me.realmName = Get(GetRealmName)
+	for index = #realms, 1, -1 do realms[index] = nil end
+	for _, realm in ipairs({ me.realm or false, me.realmName or false }) do
+		if type(realm) == "string" and realm ~= SECRET then realms[#realms + 1] = realm end
+	end
 	me.key = Util.Clean(tostring(me.name) .. "-" .. tostring(me.realm))
 	local _, classFile = Get(UnitClass, "player")
 	me.class = classFile
@@ -117,10 +125,22 @@ function Identity.RequestRoster()
 end
 
 -- GUILD_ROSTER_UPDATE fires often; the roster is rebuilt at most every few
--- seconds. GetGuildRosterInfo gives the GUID as its 17th return on Forever.
+-- seconds. An update that comes too soon is not lost: the roster is read
+-- once more when the gap is over, or a member who just joined or logged in
+-- would stay unknown until the client fires the event again.
+-- GetGuildRosterInfo gives the GUID as its 17th return on Forever.
 function Identity.UpdateRoster(force)
 	local now = Util.Now()
-	if not force and now - roster.at < ROSTER_MIN_GAP then return false end
+	if not force and now - roster.at < ROSTER_MIN_GAP then
+		if not roster.pending then
+			roster.pending = true
+			Util.After(ROSTER_MIN_GAP - (now - roster.at) + 0.5, "roster", function()
+				roster.pending = false
+				Identity.UpdateRoster(true)
+			end)
+		end
+		return false
+	end
 	local count = Get(GetNumGuildMembers)
 	if type(count) ~= "number" or count <= 0 then
 		if not Identity.InGuild() then
@@ -254,6 +274,39 @@ end
 function Identity.IsEnemy(facts)
 	local faction = Identity.FactionOf(facts)
 	return faction ~= nil and me.enemyFaction ~= nil and faction == me.enemyFaction
+end
+
+--------------------------------------------------------------------------------
+-- Role of a character
+--
+-- Tank, healer or damage: what the character's player says it plays, chosen
+-- in the Me tab. Forever's talents are one free tree, with nothing in the
+-- client that names a role for it, so the addon does not guess one.
+--------------------------------------------------------------------------------
+
+Identity.ROLES = { "T", "H", "D" }
+local IS_ROLE = { T = true, H = true, D = true }
+
+function Identity.IsRole(value)
+	return IS_ROLE[value] == true
+end
+
+-- The role of the character played now, nil until one is chosen.
+function Identity.Role()
+	if not (me.guid and ns.db) then return nil end
+	local role = ns.Db.Character(me.guid).role
+	return IS_ROLE[role] and role or nil
+end
+
+-- Takes effect at once and goes out with the profile; nil removes it.
+function Identity.SetRole(role)
+	if not (me.guid and ns.db) then return nil end
+	role = IS_ROLE[role] and role or nil
+	local character = ns.Db.Character(me.guid)
+	if character.role == role then return role end
+	character.role = role
+	if ns.Fire then ns.Fire("RoleChanged", role) end
+	return role
 end
 
 --------------------------------------------------------------------------------

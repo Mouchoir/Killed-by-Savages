@@ -151,8 +151,10 @@ local function Aggregate(guid)
 			local key = record.ktail or (record.kname and ("pet:" .. record.kname)) or nil
 			-- The client fires PLAYER_DEAD twice at times; a journal written
 			-- before 0.1.13 can hold the same death twice in a row. Once,
-			-- and the feed skips the copy too.
-			if lastDeath and key and key == lastDeath.key and record.t - lastDeath.t <= REPEAT_WINDOW then
+			-- and the feed skips the copy too. Seconds apart either way: a
+			-- backfilled death, older than the one before it in the journal,
+			-- is a death of its own.
+			if lastDeath and key and key == lastDeath.key and math.abs(record.t - lastDeath.t) <= REPEAT_WINDOW then
 				agg.repeated = agg.repeated + 1
 				agg.repeats[seq] = true
 			else
@@ -352,7 +354,11 @@ function Stats.AuthorInfo(guid)
 		race = profile and profile.race or nil,
 		level = (member and member.level) or (profile and profile.level) or nil,
 		playerKey = profile and profile.playerKey or nil,
+		role = profile and profile.role or nil,
 		alias = profile and profile.alias or nil,
+		-- When the character itself last stated its profile: a hello, or a
+		-- profile of its own. One relayed with a page states nothing.
+		statedAt = author and math.max(author.profileAt or 0, author.lastHello or 0) or 0,
 		before = before,
 		inGuild = member ~= nil,
 		verified = author and author.profileVerified == true,
@@ -386,13 +392,24 @@ function Stats.Characters(period, bucket)
 			local sum = Stats.Character(guid, period, bucket)
 			if sum.kills > 0 or sum.deaths > 0 then
 				local info = Stats.AuthorInfo(guid)
-				sum.guid, sum.name, sum.class, sum.level = guid, info.name, info.class, info.level
+				sum.guid, sum.name, sum.class, sum.level, sum.role = guid, info.name, info.class, info.level, info.role
 				sum.playerKey, sum.me, sum.before = info.playerKey, guid == Identity.me.guid, info.before
 				rows[#rows + 1] = sum
 			end
 		end
 	end
 	return SortRows(rows)
+end
+
+-- Whether the word of character a on the name of its player beats that of
+-- b: the one that stated its profile last, since the name belongs to the
+-- account and an alt that has not logged in since still carries the old
+-- one. Profiles from before 1.0.1 have no date: one with a name first,
+-- then always the same one.
+local function StatedLater(a, b)
+	if a.at ~= b.at then return a.at > b.at end
+	if (a.alias ~= nil) ~= (b.alias ~= nil) then return a.alias ~= nil end
+	return a.guid < b.guid
 end
 
 -- Characters grouped by Battle.net account: a player. Only characters still
@@ -420,7 +437,8 @@ function Stats.Players(period, bucket)
 			group.deaths = group.deaths + sum.deaths
 			group.before = group.before + (info.before or 0)
 			group.characters[#group.characters + 1] = { guid = guid, name = info.name, class = info.class, kills = sum.kills, ever = ever.kills, deaths = sum.deaths }
-			if info.alias and (not group.alias or info.verified) then group.alias = info.alias end
+			local word = { guid = guid, alias = info.alias, at = info.statedAt or 0 }
+			if not group.word or StatedLater(word, group.word) then group.word = word end
 			if guid == Identity.me.guid then group.me = true end
 		end
 	end
@@ -432,6 +450,14 @@ function Stats.Players(period, bucket)
 				return a.name < b.name
 			end)
 			local main = group.characters[1]
+			-- My own name is the one set here, whatever the profiles of
+			-- my other characters still say.
+			if group.me then
+				group.alias = Identity.Alias()
+			else
+				group.alias = group.word and group.word.alias or nil
+			end
+			group.word = nil
 			group.name = group.alias or main.name
 			group.class = main.class
 			group.mainGuid = main.guid
@@ -668,23 +694,26 @@ end
 -- The feed
 --------------------------------------------------------------------------------
 
--- The latest kills and deaths of the guild, newest first.
-function Stats.Feed(limit, bucket)
-	local key = tostring(limit) .. ":" .. tostring(bucket)
+-- The latest kills and deaths of the guild, newest first: those of a period
+-- when one is given, cut to the limit after the period is applied.
+function Stats.Feed(limit, bucket, period)
+	period = period or "all"
+	local key = tostring(limit) .. ":" .. tostring(bucket) .. ":" .. period
 	if cache.feed[key] then return cache.feed[key] end
 	local list = {}
+	local current = Stats.CurrentWeek()
+	local function Take(items, guid)
+		for _, item in ipairs(items) do
+			local record = item.record
+			if (bucket == "all" or record.bucket == bucket) and InPeriod(period, Stats.WeekIndex(record.t), current) then
+				list[#list + 1] = { t = record.t, record = record, author = guid, provisional = item.provisional }
+			end
+		end
+	end
 	for guid in pairs(ns.db.authors) do
 		local agg = Stats.AuthorAggregate(guid)
-		for _, kill in ipairs(agg.kills) do
-			if bucket == "all" or kill.record.bucket == bucket then
-				list[#list + 1] = { t = kill.record.t, record = kill.record, author = guid, provisional = kill.provisional }
-			end
-		end
-		for _, death in ipairs(agg.deaths) do
-			if bucket == "all" or death.record.bucket == bucket then
-				list[#list + 1] = { t = death.record.t, record = death.record, author = guid, provisional = death.provisional }
-			end
-		end
+		Take(agg.kills, guid)
+		Take(agg.deaths, guid)
 	end
 	table.sort(list, function(a, b)
 		if a.t ~= b.t then return a.t > b.t end

@@ -132,7 +132,7 @@ function Records.EncodeCounter(r)
 end
 
 function Records.EncodeProfile(p)
-	return Join("P1", p.name, p.class, p.race, p.realm, p.playerKey, p.alias, p.level, p.baselineHK, p.lifeHK, p.version)
+	return Join("P1", p.name, p.class, p.race, p.realm, p.playerKey, p.alias, p.level, p.baselineHK, p.lifeHK, p.version, p.role)
 end
 
 function Records.Encode(r)
@@ -192,6 +192,9 @@ function Records.DecodeProfile(text)
 	return {
 		name = Str(f[2]), class = Str(f[3]), race = Str(f[4]), realm = Str(f[5]), playerKey = Str(f[6]),
 		alias = Str(f[7]), level = Num(f[8]), baselineHK = Num(f[9]), lifeHK = Num(f[10]), version = Str(f[11]),
+		-- Since 1.0.1, at the end: versions before read the fields by
+		-- position and never look this far.
+		role = ns.Identity.IsRole(f[12]) and f[12] or nil,
 	}
 end
 
@@ -574,7 +577,7 @@ function Records.OwnProfile()
 	local profile = {
 		name = me.name, class = me.class, race = me.race, realm = me.realm, playerKey = me.playerKey,
 		alias = ns.Identity.Alias(), level = me.level, baselineHK = char.baselineHK, lifeHK = char.lifeHK,
-		version = ns.VERSION,
+		version = ns.VERSION, role = ns.Identity.Role(),
 	}
 	local author = Records.Author(me.guid)
 	author.own = true

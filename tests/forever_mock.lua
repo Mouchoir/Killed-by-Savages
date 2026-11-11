@@ -270,7 +270,10 @@ end
 -- Frames: just enough widget API for the addons and their windows.
 --------------------------------------------------------------------------------
 
-local FIELD_KEYS = { Low = true, High = true, Text = true, Inset = true, TitleText = true, Bg = true, Icon = true, NineSlice = true, ScrollBar = true }
+local FIELD_KEYS = {
+	Low = true, High = true, Text = true, Inset = true, TitleText = true, Bg = true, Icon = true, NineSlice = true, ScrollBar = true,
+	Instructions = true,
+}
 
 local function NewFrame(client, kind, name)
 	local frame = { kind = kind or "Frame", name = name, shown = true, scripts = {}, events = {}, text = "", children = {} }

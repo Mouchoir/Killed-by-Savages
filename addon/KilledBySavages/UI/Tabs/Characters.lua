@@ -1,13 +1,21 @@
 local _, ns = ...
 
 --------------------------------------------------------------------------------
--- Characters tab: one line per character, ranked.
+-- Characters tab: one line per character, ranked. The bar above the list
+-- finds a character by its name or its player's, and keeps the classes,
+-- the levels and the roles chosen.
 --------------------------------------------------------------------------------
 
 local Theme = ns.Theme
 local Stats = ns.Stats
 local ListView = ns.ListView
+local Filters = ns.Filters
 local L = ns.L
+
+-- A character answers to its name and to the name of its player.
+local function Names(row)
+	return { row.name, row.player }
+end
 
 local function EventLabel(record)
 	if record.how == "kb" or record.how == "pet" then return L.EVENT_KB end
@@ -39,19 +47,41 @@ ns.UI.RegisterTab({
 	key = "characters",
 	title = L.TAB_CHARACTERS,
 	Build = function(frame)
+		frame.Fill = function()
+			local rows = frame.rows or {}
+			frame.filters:SetClasses(rows)
+			local shown = Filters.Fill(frame.filters, frame.view, rows, L.EMPTY_PLAYERS)
+			frame.filters:SetCount(#shown, #rows)
+		end
+		frame.filters = Filters.New(frame, { search = true, classes = true, levels = true, roles = true,
+			searchTip = L.FILTER_SEARCH_TIP_CHARACTERS }, { names = Names }, function() frame.Fill() end)
+		frame.filters.frame:SetPoint("TOPLEFT", 0, 0)
+		frame.filters.frame:SetPoint("TOPRIGHT", 0, 0)
+		-- 724 px of columns, as before the role had one: the name gave it room.
 		frame.view = ListView.New(frame, {
 			{ key = "rank", title = L.COL_RANK, width = 44, align = "RIGHT", muted = true },
-			{ key = "name", title = L.COL_CHARACTER, width = 210, icon = "class", classColor = true, sort = "text" },
-			{ key = "level", title = L.COL_LEVEL, width = 50, align = "RIGHT", muted = true, sort = "number" },
-			{ key = "kills", title = L.COL_KILLS, width = 84, align = "RIGHT", sort = "number", format = Theme.Number },
-			{ key = "kb", title = L.COL_KB, width = 106, align = "RIGHT", sort = "number", format = Theme.Number },
-			{ key = "assists", title = L.COL_ASSISTS, width = 84, align = "RIGHT", sort = "number", format = Theme.Number },
-			{ key = "deaths", title = L.COL_DEATHS, width = 80, align = "RIGHT", sort = "number", format = Theme.Number },
+			{ key = "name", title = L.COL_CHARACTER, width = 186, icon = "class", classColor = true, sort = "text" },
+			{ key = "level", title = L.COL_LEVEL, width = 46, align = "RIGHT", muted = true, sort = "number" },
+			{ key = "roleText", title = L.COL_ROLE, width = 58, muted = true, sort = "text", tip = L.COL_ROLE_TIP },
+			{ key = "kills", title = L.COL_KILLS, width = 76, align = "RIGHT", sort = "number", format = Theme.Number },
+			{ key = "kb", title = L.COL_KB, width = 96, align = "RIGHT", sort = "number", format = Theme.Number },
+			{ key = "assists", title = L.COL_ASSISTS, width = 76, align = "RIGHT", sort = "number", format = Theme.Number },
+			{ key = "deaths", title = L.COL_DEATHS, width = 76, align = "RIGHT", sort = "number", format = Theme.Number },
 			{ key = "kd", title = L.COL_KD, width = 66, align = "RIGHT", sort = "number", format = Theme.Ratio },
 		}, { emptyText = L.EMPTY_PLAYERS, tooltip = Tooltip })
-		frame.view.panel:SetAllPoints(frame)
+		frame.view.panel:SetPoint("TOPLEFT", 0, -(Filters.HEIGHT + 6))
+		frame.view.panel:SetPoint("BOTTOMRIGHT", 0, 0)
 	end,
 	Refresh = function(frame, period, bucket)
-		frame.view:SetData(Stats.Characters(period, bucket))
+		-- The name each character's player shows under, as on the players tab.
+		local players = {}
+		for _, player in ipairs(Stats.Players("all", "all")) do players[player.key] = player.name end
+		local rows = Stats.Characters(period, bucket)
+		for _, row in ipairs(rows) do
+			row.player = players[row.playerKey or ("char:" .. row.guid)]
+			row.roleText = Filters.ROLE_TEXT[row.role] or ""
+		end
+		frame.rows = rows
+		frame.Fill()
 	end,
 })

@@ -2193,14 +2193,405 @@ local function OutdatedAddons()
 	check("the players too old to be told are in orange, the whole line, the others not, and the note says what orange means",
 		oldInOrange and colorE ~= nil and colorE[1] ~= warnR and colorE[4] ~= warnR and tip[#tip] == L.OUTDATED_SILENT,
 		lineE and tip[lineE])
+	-- The footer ticks every second; who is outdated is a pass over the
+	-- whole roster, looked at again when something says it changed or once
+	-- in a while.
 	local real = Sync.Outdated
-	Sync.Outdated = function() return { newest = "0.1.19", players = {} } end
+	local asked = 0
+	A.ns.UI.Refresh()
+	Sync.Outdated = function()
+		asked = asked + 1
+		return { newest = "0.1.19", players = {} }
+	end
 	board:GetScript("OnUpdate")(board, 1)
+	check("the footer's tick alone does not go through the roster again", asked == 0 and board.outdated.shown == true, asked)
+	Mock.advance(16)
+	board:GetScript("OnUpdate")(board, 1)
+	check("it does once in a while", asked >= 1, asked)
 	check("with everyone up to date there is no notice", not board.outdated.shown)
 	Sync.Outdated = real
 	A.slash("")
 end
 OutdatedAddons()
+
+--------------------------------------------------------------------------------
+section("Search, filters and roles")
+--------------------------------------------------------------------------------
+
+-- A bar above the lists: a search box that finds a name from any part of
+-- it, and on the characters a toggle per class, level bounds and a toggle
+-- per role. The role is what each player says its character plays, chosen
+-- in the Me tab and sent with the profile.
+local function Click(button)
+	button:GetScript("OnClick")(button)
+end
+
+local function SearchAndFilters()
+	local ns, L = A.ns, A.ns.L
+	check("a name folds to lower case, its accents and ligatures off", ns.Util.Fold("Søren MÉLINÉ d'Œil") == "soren meline d'oeil",
+		ns.Util.Fold("Søren MÉLINÉ d'Œil"))
+
+	-- The bar on its own.
+	local changes = 0
+	local bar = ns.Filters.New(A.env.CreateFrame("Frame"), { search = true, classes = true, levels = true, roles = true }, nil,
+		function() changes = changes + 1 end)
+	local rows = {
+		{ name = "Søren Åsgard", class = "MAGE", level = 34, role = "H" },
+		{ name = "Elda Méliné", class = "WARRIOR", level = 12, role = "T" },
+		{ name = "Mira Sorel", class = "MAGE", level = 60 },
+		{ name = "Tobin Ashe", class = "ROGUE" },
+	}
+	local function Kept()
+		local names = {}
+		for index, row in ipairs(bar:Apply(rows)) do names[index] = row.name end
+		return table.concat(names, ",")
+	end
+	check("with nothing set every row shows and no clear button", bar:Apply(rows) == rows and not bar:Active() and bar.reset.shown == false)
+	bar.searchBox:SetText("  SOR ")
+	check("a part of a name finds it, whatever the case or the accents", Kept() == "Søren Åsgard,Mira Sorel" and changes == 1, Kept())
+	bar.searchBox:SetText("meline")
+	check("an accent left out still finds the name", Kept() == "Elda Méliné", Kept())
+	bar.searchBox:SetText("")
+	bar:SetClasses(rows)
+	local function ClassButton(classFile)
+		for _, button in ipairs(bar.classButtons) do
+			if button.classFile == classFile and button.shown then return button end
+		end
+		return nil
+	end
+	check("the bar shows one icon per class on the list, by class name", #bar.classButtons == 3 and bar.classButtons[1].classFile == "WARRIOR"
+		and bar.classButtons[2].classFile == "MAGE" and bar.classButtons[3].classFile == "ROGUE", bar.classButtons[1].classFile)
+	Click(ClassButton("MAGE"))
+	check("a class chosen keeps its characters only, marked under its icon", Kept() == "Søren Åsgard,Mira Sorel"
+		and ClassButton("MAGE").mark.shown == true and ClassButton("ROGUE").mark.shown == false, Kept())
+	Click(ClassButton("ROGUE"))
+	check("several classes add up", Kept() == "Søren Åsgard,Mira Sorel,Tobin Ashe", Kept())
+	bar.minBox:SetText("30")
+	check("a level bound leaves out the lower levels and the levels unknown", Kept() == "Søren Åsgard,Mira Sorel", Kept())
+	bar.maxBox:SetText("40")
+	check("both bounds keep the levels between them", Kept() == "Søren Åsgard", Kept())
+	bar.minBox:SetText("60")
+	check("bounds typed the wrong way round are read the right way", Kept() == "Mira Sorel", Kept())
+	Click(bar.reset)
+	check("the clear button takes every filter off and empties the boxes", not bar:Active() and bar.minBox:GetText() == ""
+		and bar.maxBox:GetText() == "" and bar.reset.shown == false and bar:Apply(rows) == rows)
+	Click(bar.roleButtons.T)
+	check("a role chosen keeps the characters of that role, not those without one, and lights its button",
+		Kept() == "Elda Méliné" and bar.roleButtons.T.selected == true and bar.roleButtons.H.selected ~= true and bar.reset.shown == true, Kept())
+	Click(bar.roleButtons.H)
+	check("several roles add up", Kept() == "Søren Åsgard,Elda Méliné", Kept())
+	Click(bar.roleButtons.T)
+	Click(bar.roleButtons.H)
+	Click(ClassButton("ROGUE"))
+	bar:SetClasses({ rows[1], rows[2] })
+	check("a class chosen that left the list is dropped rather than hiding everything", not bar:Active() and #bar:Apply(rows) == 4)
+
+	-- The role in the profile: one more field at the end, where versions
+	-- before 1.0.1 never look.
+	local sample = { name = "Aldric Stormhand", class = "HUNTER", race = "Human", realm = "Ashbringer", playerKey = "a1bf6c73",
+		alias = "Aldric", level = 60, baselineHK = 500, lifeHK = 512, version = "1.0.1", role = "H" }
+	local line = ns.Records.EncodeProfile(sample)
+	check("a profile carries the role as its last field", line == "P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.1;H", line)
+	check("and reads it back, a profile without one or with something else giving none", ns.Records.DecodeProfile(line).role == "H"
+		and ns.Records.DecodeProfile("P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.0").role == nil
+		and ns.Records.DecodeProfile("P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.1;Boss").role == nil)
+
+	-- A member chooses the role of its character in the Me tab.
+	local alt
+	for _, client in ipairs(Mock.clients) do
+		if client.name == "Bryn Ironvale" then alt = client end
+	end
+	-- One account plays one character at a time.
+	if B.online then
+		B.logout()
+		advance(5)
+	end
+	if not alt.online then
+		alt.login()
+		advance(30)
+	end
+	GainHK(alt)
+	advance(10)
+	alt.ns.UI.Show()
+	alt.ns.UI.SelectTab("me")
+	local meTab = alt.ns.UI.Frame().tabFrames.me
+	local profilesBefore = SentSince(0, "GUILD", "P")
+	Click(meTab.roleButtons.H)
+	advance(5)
+	check("a role chosen in the Me tab is kept for the character, lit, and goes out with its profile at once",
+		alt.ns.Identity.Role() == "H" and alt.db().characters[alt.guid].role == "H" and meTab.roleButtons.H.selected == true
+		and meTab.roleButtons.T.selected ~= true and ns.Stats.AuthorInfo(alt.guid).role == "H"
+		and SentSince(0, "GUILD", "P") > profilesBefore, tostring(ns.Stats.AuthorInfo(alt.guid).role))
+	Click(meTab.roleButtons.H)
+	advance(5)
+	check("the chosen role clicked again removes it, for the guild too",
+		alt.ns.Identity.Role() == nil and meTab.roleButtons.H.selected ~= true and ns.Stats.AuthorInfo(alt.guid).role == nil)
+	Click(meTab.roleButtons.T)
+	advance(5)
+	alt.ns.UI.Hide()
+
+	-- On A's board.
+	ns.UI.Show()
+	ns.UI.SetPeriod("all")
+	ns.UI.SetBucket("all")
+	local board = ns.UI.Frame()
+	local function Data(view)
+		local list = {}
+		for index, row in ipairs(Rows(view)) do list[index] = row.row.data end
+		return list
+	end
+
+	-- Characters: the role column and filter, the search by the player's name.
+	ns.UI.SelectTab("characters")
+	local characters = board.tabFrames.characters
+	local everyone = #Data(characters.view)
+	local altRow
+	for _, data in ipairs(Data(characters.view)) do
+		if data.guid == alt.guid then altRow = data end
+	end
+	check("the characters ranking says the role of those who chose one", everyone == #ns.Stats.Characters("all", "all") and altRow ~= nil
+		and altRow.roleText == L.ROLE_TANK, altRow and altRow.roleText)
+	Click(characters.filters.roleButtons.T)
+	local tanks = Data(characters.view)
+	check("the role filter keeps the characters of that role, and says how many of how many",
+		#tanks == 1 and tanks[1].guid == alt.guid and characters.filters.count.shown == true
+		and characters.filters.count.text == L.FILTER_COUNT:format(1, everyone), #tanks)
+	Click(characters.filters.roleButtons.T)
+	local player
+	for _, row in ipairs(ns.Stats.Players("all", "all")) do
+		for _, character in ipairs(row.characters) do
+			if character.guid == alt.guid then player = row end
+		end
+	end
+	local expected = {}
+	for _, character in ipairs(player.characters) do
+		for _, row in ipairs(ns.Stats.Characters("all", "all")) do
+			if row.guid == character.guid then expected[row.guid] = true end
+		end
+	end
+	characters.filters.searchBox:SetText(player.name:upper())
+	local hits, others = 0, 0
+	for _, data in ipairs(Data(characters.view)) do
+		if expected[data.guid] then hits = hits + 1 else others = others + 1 end
+	end
+	check("a character is found by the name of its player: all of that player's characters show",
+		hits == count(expected) and hits >= 2 and others == 0, ("%d of %d, %d others"):format(hits, count(expected), others))
+	characters.filters.searchBox:SetText("zzzz")
+	check("a search that finds nothing says so, not that nobody killed anyone",
+		#Data(characters.view) == 0 and characters.view.empty.shown == true and characters.view.empty.text == L.EMPTY_FILTERED)
+	Click(characters.filters.reset)
+	check("cleared, the whole ranking is back with its usual empty text", #Data(characters.view) == everyone
+		and characters.view.empty.text == L.EMPTY_PLAYERS and characters.filters.searchBox:GetText() == "")
+	characters.filters.minBox:SetText("1")
+	local levelled = 0
+	for _, row in ipairs(ns.Stats.Characters("all", "all")) do
+		if type(row.level) == "number" and row.level >= 1 then levelled = levelled + 1 end
+	end
+	check("the level filter goes by the roster's levels", #Data(characters.view) == levelled, #Data(characters.view))
+	Click(characters.filters.reset)
+
+	-- Players: found by the name of any character.
+	ns.UI.SelectTab("players")
+	local playerList = board.tabFrames.players
+	local everyPlayer = ns.Stats.Players("all", "all")
+	local target, fragment
+	for _, row in ipairs(everyPlayer) do
+		for _, character in ipairs(row.characters) do
+			local part = ns.Util.Fold(character.name):sub(3, 8)
+			if not target and not ns.Util.Fold(row.name):find(part, 1, true) then target, fragment = row, part end
+		end
+	end
+	check("the players tab has a search box and nothing else to filter by", playerList.filters.searchBox ~= nil and playerList.filters.minBox == nil
+		and playerList.filters.classStrip == nil and next(playerList.filters.roleButtons) == nil and target ~= nil)
+	local matching = 0
+	for _, row in ipairs(everyPlayer) do
+		local hit = ns.Util.Fold(row.name):find(fragment, 1, true) ~= nil
+		for _, character in ipairs(row.characters) do
+			if ns.Util.Fold(character.name):find(fragment, 1, true) then hit = true end
+		end
+		if hit then matching = matching + 1 end
+	end
+	playerList.filters.searchBox:SetText(fragment:upper())
+	local shownTarget = false
+	for _, data in ipairs(Data(playerList.view)) do
+		if data.key == target.key then shownTarget = true end
+	end
+	check("a player is found by a part of the name of one of its characters, with its numbers and its rank",
+		shownTarget and #Data(playerList.view) == matching and matching < #everyPlayer and Data(playerList.view)[1].rank ~= nil
+		and Data(playerList.view)[1].kd ~= nil, ("%s: %d shown, %d expected"):format(fragment, #Data(playerList.view), matching))
+	Click(playerList.filters.reset)
+	check("cleared, every player is back", #Data(playerList.view) == #everyPlayer)
+
+	-- Hunt: one bar for both boards, name and class; none on the Me tab's.
+	ns.UI.SelectTab("hunt")
+	local hunt = board.tabFrames.hunt
+	local victim = hunt.victimRows[1]
+	hunt.filters.searchBox:SetText(ns.Util.Fold(victim.name):sub(1, 5):upper())
+	local allMatch = #Data(hunt.victims) >= 1
+	for _, data in ipairs(Data(hunt.victims)) do
+		if not ns.Util.Fold(data.name):find(ns.Util.Fold(victim.name):sub(1, 5), 1, true) then allMatch = false end
+	end
+	for _, data in ipairs(Data(hunt.killers)) do
+		if not ns.Util.Fold(data.name):find(ns.Util.Fold(victim.name):sub(1, 5), 1, true) then allMatch = false end
+	end
+	check("the hunt tab finds an enemy by name on both boards, by name and class only", allMatch and #Data(hunt.victims) < #hunt.victimRows
+		and hunt.filters.classStrip ~= nil and hunt.filters.minBox == nil and next(hunt.filters.roleButtons) == nil,
+		#Data(hunt.victims))
+	Click(hunt.filters.reset)
+	local withClass
+	for _, row in ipairs(hunt.victimRows) do
+		if not withClass and row.classFile then withClass = row.classFile end
+	end
+	local classButton
+	for _, button in ipairs(hunt.filters.classButtons) do
+		if button.classFile == withClass then classButton = button end
+	end
+	Click(classButton)
+	local sameClass = #Data(hunt.victims) >= 1
+	for _, data in ipairs(Data(hunt.victims)) do
+		if data.classFile ~= withClass then sameClass = false end
+	end
+	for _, data in ipairs(Data(hunt.killers)) do
+		if data.classFile ~= withClass then sameClass = false end
+	end
+	check("and keeps the enemies of a class on both boards", sameClass, withClass)
+	Click(hunt.filters.reset)
+	ns.UI.SelectTab("me")
+	check("my own boards on the Me tab have no bar", board.tabFrames.me.boards.filters == nil and board.tabFrames.me.boards.victims ~= nil)
+	ns.UI.Hide()
+end
+SearchAndFilters()
+
+--------------------------------------------------------------------------------
+section("Review fixes of 1.0.1")
+--------------------------------------------------------------------------------
+
+local function ReviewFixes()
+	local ns = A.ns
+	local alt
+	for _, client in ipairs(Mock.clients) do
+		if client.name == "Bryn Ironvale" then alt = client end
+	end
+	local function PlayerOf(guid)
+		for _, row in ipairs(ns.Stats.Players("all", "all")) do
+			for _, character in ipairs(row.characters) do
+				if character.guid == guid then return row end
+			end
+		end
+		return nil
+	end
+
+	-- A player's name is the one its characters stated last: an alt that
+	-- has not logged in since still carries the old one.
+	local authors = A.db().authors
+	local main, other = authors[B.guid], authors[alt.guid]
+	local keep = { main.profile.alias, main.lastHello, main.profileAt, other.profile.alias, other.lastHello, other.profileAt }
+	local nowAt = Mock.Server()
+	main.profile.alias, main.lastHello, main.profileAt = "Old Name", nowAt - 5000, nil
+	other.profile.alias, other.lastHello, other.profileAt = "New Name", nowAt - 9000, nowAt - 60
+	ns.Stats.Invalidate()
+	local first = PlayerOf(B.guid).name
+	main.lastHello, other.profileAt = nowAt - 30, nowAt - 60
+	ns.Stats.Invalidate()
+	local second = PlayerOf(B.guid).name
+	other.profile.alias, other.profileAt = nil, nowAt - 10
+	ns.Stats.Invalidate()
+	local third = PlayerOf(B.guid).name
+	check("a player shows under the name its characters stated last, whichever the roster lists first",
+		first == "New Name" and second == "Old Name", first .. " / " .. second)
+	check("a name taken off on the character heard last is off, whatever an alt still says",
+		third ~= "Old Name" and third ~= "New Name", third)
+	main.profile.alias, main.lastHello, main.profileAt, other.profile.alias, other.lastHello, other.profileAt = unpack(keep, 1, 6)
+	local own = authors[A.guid].profile
+	local ownAlias = own.alias
+	own.alias = "Stale Name"
+	ns.Stats.Invalidate()
+	check("my own name is the one set here, whatever my stored profile says", PlayerOf(A.guid).name ~= "Stale Name", PlayerOf(A.guid).name)
+	own.alias = ownAlias
+	ns.Stats.Invalidate()
+
+	-- A death older than the one before it in the journal (the probe's
+	-- backfill) by the same killer is a death of its own, and the feed of
+	-- a period is cut to its limit after the period is applied.
+	local killer = { kkind = "p", ktail = "6938-00CC00DD", kname = "Vorga Blackmaw", kclass = "ROGUE", krace = "Orc", bucket = "w", mapID = 52 }
+	local function Death(t)
+		local entry = { type = "D", t = t }
+		for key, value in pairs(killer) do entry[key] = value end
+		return ns.Records.AppendOwn(entry)
+	end
+	local lastWeek = ns.Stats.WeekStart(ns.Stats.CurrentWeek()) - 3600
+	Death(nowAt - 100)
+	local older = Death(lastWeek)
+	advance(5)
+	local byKiller
+	for _, row in ipairs(ns.Stats.Killers("all", "all", { guid = A.guid })) do
+		if row.tail == "6938-00CC00DD" then byKiller = row end
+	end
+	check("a death older than the one before it by the same killer still counts",
+		byKiller ~= nil and byKiller.count == 2 and not ns.Stats.AuthorAggregate(A.guid).repeats[older], byKiller and byKiller.count)
+	local lastFeed = ns.Stats.Feed(1, "all", "last")
+	check("the feed of last week is cut to its limit after the week is taken, not before",
+		#ns.Stats.Feed(1, "all") == 1 and ns.Stats.Feed(1, "all")[1].t > lastWeek and #lastFeed == 1 and lastFeed[1].t == lastWeek, #lastFeed)
+
+	-- The feed's time column sorts on the time itself and keeps its order.
+	ns.UI.Show()
+	ns.UI.SetPeriod("all")
+	ns.UI.SetBucket("all")
+	ns.UI.SelectTab("guild")
+	local view = ns.UI.Frame().tabFrames.guild.view
+	local function Ordered(descending)
+		local previous
+		for _, row in ipairs(Rows(view)) do
+			local t = row.row.data.t
+			if previous and ((descending and t > previous) or (not descending and t < previous)) then return false end
+			previous = t
+		end
+		return #Rows(view) >= 2
+	end
+	local newestFirst = Ordered(true)
+	Click(view.headers[1])
+	local oldestFirst = Ordered(false)
+	ns.UI.Refresh()
+	check("the feed lists the newest first, its time column sorts on the time, and a refresh keeps the order chosen",
+		newestFirst and oldestFirst and Ordered(false) and view.sortField == "t", tostring(view.sortField))
+	Click(view.headers[1])
+	ns.UI.Hide()
+
+	-- A roster update inside the gap after a rebuild is read when the gap ends.
+	ns.Identity.UpdateRoster(true)
+	local at = ns.Identity.roster.at
+	advance(2)
+	A.fire("GUILD_ROSTER_UPDATE")
+	local waiting = ns.Identity.roster.at == at and ns.Identity.roster.pending == true
+	advance(10)
+	check("a roster update that comes too soon after a rebuild is read once the gap is over",
+		waiting and ns.Identity.roster.at > at and not ns.Identity.roster.pending, ns.Identity.roster.at - at)
+
+	-- A page whose chunks the queue refuses is not counted as going out.
+	local sync = ns.Sync.State()
+	local queued = #sync.queue
+	for _ = 1, 400 do
+		sync.queue[#sync.queue + 1] = { kind = "pad", text = "", channel = "GUILD", priority = 9 }
+	end
+	local full = A.counter("sync.queueFull")
+	A.fire("CHAT_MSG_ADDON", "KBS", ("Q^%s^1"):format(ns.Identity.me.tail), "WHISPER", C.name)
+	local refused = A.counter("sync.queueFull") - full
+	for index = #sync.queue, 1, -1 do
+		if sync.queue[index].kind == "pad" then table.remove(sync.queue, index) end
+	end
+	check("a page whose chunks the full queue refuses does not stay counted as going out",
+		refused >= 1 and ns.Sync.State().outPages == 0 and #sync.queue == queued, ("%d refused, %d out"):format(refused, ns.Sync.State().outPages))
+
+	-- A killing blow on a player of our own faction is no candidate for an HK.
+	Mock.AddPlayer(Guid(45), { name = "Perrin Holt", class = "MAGE", race = "Human", faction = "Alliance" })
+	local notEnemy = A.counter("detect.killNotEnemy")
+	A.fire("PARTY_KILL", A.guid, Guid(45))
+	GainHK(A)
+	advance(5)
+	check("a killing blow on a player of our own faction is not the victim of the HK that comes with it",
+		A.counter("detect.killNotEnemy") == notEnemy + 1 and Last(A).type == "K" and Last(A).vname == nil, tostring(Last(A).vname))
+end
+ReviewFixes()
 
 --------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")
@@ -2216,8 +2607,9 @@ for _, client in ipairs(Mock.clients) do
 	end
 end
 -- 25000 since 1.0.0: one more member (an alt) and the time each member was
--- last heard from add about 700 bytes.
-check("the saved data stays small", #Serialize(A.db()) < 25000, #Serialize(A.db()))
+-- last heard from add about 700 bytes. 26000 since 1.0.1: when each member
+-- last stated its profile, about 250 bytes.
+check("the saved data stays small", #Serialize(A.db()) < 26000, #Serialize(A.db()))
 check("records are stored as strings, not tables", (function()
 	for _, entry in pairs(A.db().authors[Guid(1)].log) do
 		if type(entry) ~= "string" then return false end

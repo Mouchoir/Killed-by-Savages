@@ -78,7 +78,29 @@ a protected call (seen with 1.0.0, fixed in 1.0.1).
 
 A player shows on the players ranking under its display name alone, its
 characters in the tooltip. The name is set in the Me tab: any name, or the
-name of one of its characters with the button next to it.
+name of one of its characters with the button next to it. The name is the
+account's: a player shows under the one its characters stated last, so an
+alt that has not logged in since a change does not bring the old one back.
+
+A bar above the lists finds and narrows. Its search box takes any part of
+a name, whatever the case or the accents ("sor" finds "Søren"): on the
+Players tab a player by its name or the name of any of its characters, on
+the Characters tab a character by its name or its player's, on the Hunt tab
+an enemy on both boards. The Characters tab adds an icon per class on the
+list, two level bounds (the levels are the guild roster's) and the three
+roles; the Hunt tab the classes. Several classes or roles can be chosen at
+once, "Clear" takes everything off, and the bar says how many rows are left
+of how many. A row a filter cannot judge (no level known, no role chosen)
+is left out while that filter is set. There is no dropdown anywhere: the
+client's own trips a menu assertion on Forever.
+
+The role (tank, healer, damage) is what each player says its character
+plays, chosen with three buttons in the Me tab and sent with the profile;
+the chosen one clicked again removes it. It is not read from the client:
+Forever's talents are one free tree and nothing in it names a role, so the
+addon does not guess one. `/kbs debug` prints what the client answers to
+the spec and role calls, to see whether it could be read one day. A member
+on a version before 1.0.1, or who chose nothing, has no role.
 
 The window's footer says where the sync with the guild stands: the seconds
 before the login announcement, the pages coming in, or how many journals are
@@ -135,7 +157,8 @@ your kill and death records (time, the victim's or killer's name, class,
 race and level, the map position, your lifetime honorable kill count), the
 scoreboard rows of your battlegrounds, and your profile (character name,
 class, race, realm, level, the salted BattleTag hash, your display name, the
-addon version), the version and the BattleTag hash again in the presence
+role you chose for the character, the addon version), the version and the
+BattleTag hash again in the presence
 message every 10 minutes. There is no server; the guild's members hold the
 data.
 

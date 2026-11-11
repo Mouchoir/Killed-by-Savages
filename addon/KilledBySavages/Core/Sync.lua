@@ -498,12 +498,12 @@ local function NewestRelease()
 end
 
 -- The name a player shows under, as on the players ranking: the alias of
--- the character heard from last that has one, else the character with the
--- most kills ever.
+-- the character heard from last, else the character with the most kills
+-- ever. characters come latest heard first.
 local function PlayerName(characters)
-	local alias, main, mainKills
+	local alias = characters[1] and characters[1].alias
+	local main, mainKills
 	for _, character in ipairs(characters) do
-		alias = alias or character.alias
 		local kills = ns.Stats and ns.Stats.Character(character.guid, "all", "all").kills or 0
 		if not main or kills > mainKills or (kills == mainKills and character.name < main.name) then
 			main, mainKills = character, kills
@@ -853,7 +853,11 @@ local function OnRequest(sender, tail, page)
 	end
 	local expires = Now() + OUT_PAGE_MAX_AGE
 	for index, chunk in ipairs(chunks) do
-		SendWhisper("B", ("B^%s^%d^%d^%d^%s"):format(tail, page, index, #chunks, chunk), sender, 3, expires, done, done)
+		-- A chunk the queue refuses is done with too, or the page would
+		-- count as going out for the rest of the session.
+		if not SendWhisper("B", ("B^%s^%d^%d^%d^%s"):format(tail, page, index, #chunks, chunk), sender, 3, expires, done, done) then
+			done()
+		end
 	end
 	ns.Count("sync.pageSent")
 end
@@ -1120,6 +1124,7 @@ local function OnProfile(sender, tail, text, channel)
 	if member.tail == tail then
 		author.profile = profile
 		author.profileVerified = true
+		author.profileAt = Now()
 	elseif channel == "WHISPER" and not author.profile then
 		author.profile = profile
 		author.profileVerified = nil
@@ -1417,8 +1422,8 @@ local function OnLogin()
 	end)
 end
 
--- A new display name goes out as a new profile.
-local function OnAliasChanged()
+-- A new display name or role goes out as a new profile.
+local function OnProfileEdited()
 	local me = Me()
 	if not me.tail then return end
 	local profile = Records.OwnProfile()
@@ -1435,7 +1440,8 @@ end
 
 ns.On("CHAT_MSG_ADDON", OnAddonMessage)
 ns.Hook("Login", OnLogin)
-ns.Hook("AliasChanged", OnAliasChanged)
+ns.Hook("AliasChanged", OnProfileEdited)
+ns.Hook("RoleChanged", OnProfileEdited)
 ns.Hook("RecordAdded", OnOwnRecord)
 ns.Hook("Imported", OnImported)
 ns.Hook("CounterJump", OnCounterJump)
@@ -1469,6 +1475,6 @@ end)
 function Sync.State()
 	return {
 		queue = queue, peers = peers, holders = holders, requests = requests, partial = partial, recovery = recovery,
-		advancePending = advancePending, seenHead = seenHead,
+		advancePending = advancePending, seenHead = seenHead, outPages = outPages,
 	}
 end
