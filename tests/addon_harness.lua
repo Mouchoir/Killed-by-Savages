@@ -2699,6 +2699,85 @@ end
 NewWeek()
 
 --------------------------------------------------------------------------------
+section("The demo tour")
+--------------------------------------------------------------------------------
+
+-- demo/KBSDemo plays a scripted tour of the board for screen recordings. It
+-- drives the board through its global frame and its widgets' own fields, so
+-- it breaks when they change: it runs here, on a fake client, with the rest.
+local function DemoTour()
+	local client
+	for _, candidate in ipairs(Mock.clients) do
+		if candidate.name == "Bryn Ironvale" then client = candidate end
+	end
+	local chunk = assert(loadfile("demo/KBSDemo/KBSDemo.lua"))
+	setfenv(chunk, client.env)
+	chunk("KBSDemo", {})
+	local function State()
+		local settings = client.db().settings
+		return ("alias=%s role=%s tab=%s period=%s bucket=%s"):format(tostring(settings.alias),
+			tostring(client.db().characters[client.guid].role), tostring(settings.tab), tostring(settings.period or "week"),
+			tostring(settings.bucket or "all"))
+	end
+	local function Has(trace, needle)
+		for _, line in ipairs(trace) do
+			if line:find(needle, 1, true) then return true end
+		end
+		return false
+	end
+	local function RowsSaid(trace, scene)
+		for _, line in ipairs(trace) do
+			local rows = line:match("^scene " .. scene .. ": (%d+) ")
+			if rows then return tonumber(rows) end
+		end
+		return nil
+	end
+	-- Plays a command to its end and says what the tour traced, what went
+	-- wrong, and the roles and display names the character went through.
+	local function Play(command)
+		client.env.SlashCmdList.KBSDEMO(command)
+		local roles, names = {}, {}
+		for _ = 1, 3200 do
+			advance(0.1)
+			roles[tostring(client.db().characters[client.guid].role)] = true
+			names[tostring(client.db().settings.alias)] = true
+			if Has((client.env.KBSDemoDB or {}).trace or {}, "stopped:") then break end
+		end
+		advance(3)
+		local db = client.env.KBSDemoDB or {}
+		return db.trace or {}, db.errors or {}, roles, names
+	end
+	local initial = State()
+	local trace, errors, roles, names = Play("")
+	local scenes = 0
+	for index = 1, 6 do
+		if Has(trace, "scene " .. index .. " starts") then scenes = scenes + 1 end
+	end
+	check("the demo tour plays its six scenes to the end without an error",
+		scenes == 6 and #errors == 0 and Has(trace, "stopped: end"), errors[1] or table.concat(trace, " | "))
+	check("it finds a player by one of its alts, narrows the ranking and finds an enemy, with no name written in it",
+		(RowsSaid(trace, 1) or 0) >= 1 and RowsSaid(trace, 2) ~= nil and (RowsSaid(trace, 5) or 0) >= 1 and Has(trace, "scene 4: another name to take"),
+		table.concat(trace, " | "))
+	local idle = true
+	local board = client.ns.UI.Frame()
+	for _, key in ipairs({ "players", "characters", "hunt" }) do
+		if board.tabFrames[key].filters:Active() then idle = false end
+	end
+	check("it goes through the roles and another display name, then leaves the character, the tab, the period and the bars as they were",
+		count(roles) >= 3 and count(names) >= 2 and State() == initial and idle, State() .. " / " .. initial)
+	trace, errors = Play("3")
+	check("a scene can be played alone", Has(trace, "scene 3 starts") and not Has(trace, "scene 1 starts")
+		and not Has(trace, "scene 4 starts") and #errors == 0 and State() == initial, errors[1] or table.concat(trace, " | "))
+	trace, errors = Play("1 player=ZZZZ")
+	check("the command can say what the search types, kept for the next time on this machine",
+		RowsSaid(trace, 1) == 0 and client.env.KBSDemoDB.config.player == "zzzz" and #errors == 0, table.concat(trace, " | "))
+	trace, errors = Play("1 player=")
+	check("an empty text gives the choice back to the tour", (RowsSaid(trace, 1) or 0) >= 1 and client.env.KBSDemoDB.config.player == nil
+		and #errors == 0 and State() == initial, table.concat(trace, " | "))
+end
+DemoTour()
+
+--------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")
 --------------------------------------------------------------------------------
 

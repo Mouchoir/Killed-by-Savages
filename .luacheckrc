@@ -54,7 +54,10 @@ globals = {
 }
 
 -- Written by the test run, not source; third-party libraries are not ours to lint.
-exclude_files = { "tests/last-savedvariables*.lua", "addon/KilledBySavages/Libs/**/*.lua" }
+exclude_files = { "tests/last-savedvariables*.lua", "addon/KilledBySavages/Libs/**/*.lua", "dist/**" }
+
+-- The demo tour is a dev addon of its own, with its own saved variables and slash command.
+files["demo/**/*.lua"] = { globals = { "KBSDemoDB", "SLASH_KBSDEMO1" }, read_globals = { "GetFileIDFromPath" } }
 
 -- The test harness and the report tool run under LuaJIT, outside the game.
 files["tests/**/*.lua"] = { std = "luajit", read_globals = {}, globals = {} }

@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: KBS Demo (dev)
+## Notes: Plays a scripted tour of the Killed by Savages board, for screen recording. Dev only, never packaged.
+## Author: Mouchoir
+## Version: 1.1.0
+## X-License: GPL-3.0-or-later
+## Dependencies: KilledBySavages
+## SavedVariables: KBSDemoDB
+
+KBSDemo.lua

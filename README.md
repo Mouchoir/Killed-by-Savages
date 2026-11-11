@@ -198,6 +198,10 @@ the kinds it knows.
   TOC says `X.Y.Z-dev`, so the guild is never told of a version that is not
   out; once the release tag is pushed, `-Release` deploys the build as
   published. A `/reload` in game loads it.
+- Demo GIFs for announcements: `demo\KBSDemo` plays a scripted tour of the
+  board in game, `demo\record.py` records it and `demo\makegif.py` makes
+  one GIF per scene. See `demo\README.md`. The tour also runs in the test
+  harness, so it fails there when the board's widgets change under it.
 - Icon: `scripts\make-icon.ps1` draws `Media\Logo.tga`, the icon of the
   minimap button and of the addon list, from `art\savages-logo.svg`, the
   guild's logo: a disc with the claws, 64 px, a 32-bit TGA with alpha.

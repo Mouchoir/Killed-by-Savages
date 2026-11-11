@@ -15,6 +15,8 @@ $projectRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $sources = @{
     'KBSProbe'        = Join-Path $projectRoot 'probe\KBSProbe'
     'KilledBySavages' = Join-Path $projectRoot 'addon\KilledBySavages'
+    # The scripted tour of the board, for screen recordings (see demo\README.md).
+    'KBSDemo'         = Join-Path $projectRoot 'demo\KBSDemo'
 }
 
 # Personal machine paths never live in source control. Provide yours via:
