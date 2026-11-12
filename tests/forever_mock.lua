@@ -63,6 +63,21 @@ function Mock.advance(seconds)
 	now = target
 end
 
+-- Lets time pass, a second at a time, until a condition holds or a limit
+-- is reached: for what the fake guild settles in its own time, such as a
+-- journal on its way. Returns whether it held, and the seconds waited. A
+-- shorter step looks more often, for what only shows for a moment.
+function Mock.advanceUntil(condition, limit, step)
+	step = step or 1
+	local waited = 0
+	while not condition() do
+		if waited >= limit then return false, waited end
+		Mock.advance(step)
+		waited = waited + step
+	end
+	return true, waited
+end
+
 function Mock.Now() return now end
 function Mock.Server() return math.floor(server) end
 
@@ -197,6 +212,15 @@ function Mock.AddPlayer(guid, facts)
 	facts.level = facts.level or 60
 	players[guid] = facts
 	return facts
+end
+
+-- A copy of the roster as it stands, to change a rank and set it again.
+function Mock.GuildRoster()
+	local copy = {}
+	for index, entry in ipairs(guildRoster) do
+		copy[index] = { guid = entry.guid, rank = entry.rank }
+	end
+	return copy
 end
 
 -- Entries are GUIDs (rank 3, a member) or { guid = ..., rank = n }.
@@ -344,7 +368,22 @@ local function NewFrame(client, kind, name)
 	function methods.GetScale(self) return self.scale or 1 end
 	function methods.GetChecked(self) return self.checked == true end
 	function methods.SetChecked(self, checked) self.checked = checked end
-	function methods.HasFocus() return false end
+	-- The keyboard goes to one edit box at a time; taking and losing it runs
+	-- the box's scripts, as in game.
+	function methods.SetFocus(self)
+		if client.focus == self then return end
+		if client.focus then client.focus:ClearFocus() end
+		client.focus = self
+		if self.scripts.OnEditFocusGained then self.scripts.OnEditFocusGained(self) end
+	end
+	function methods.ClearFocus(self)
+		if client.focus ~= self then return end
+		client.focus = nil
+		if self.scripts.OnEditFocusLost then self.scripts.OnEditFocusLost(self) end
+	end
+	function methods.HasFocus(self) return client.focus == self end
+	-- What is selected in an edit box: everything, or nothing with (0, 0).
+	function methods.HighlightText(self, from, to) self.highlight = not (from == 0 and to == 0) end
 	function methods.SetFont() return true end
 	function methods.SetTexture() return true end
 	function methods.GetNormalTexture() return nil end
@@ -438,6 +477,7 @@ function Mock.NewClient(spec)
 		client.generation = client.generation + 1
 		local generation = client.generation
 		client.frames = {}
+		client.focus = nil
 		local env = setmetatable({}, { __index = _G })
 		env._G = env
 		client.env = env
@@ -541,6 +581,11 @@ function Mock.NewClient(spec)
 		-- 10. A closed window keeps its name, hidden and out of the dock; a
 		-- docked tab behind another is hidden but docked. They outlive a
 		-- reload, as the game's do; the general tab is selected at login.
+		-- A window's frame carries its own docked flag and has a tab button,
+		-- shown while the window is in use. A test can make one of these
+		-- signs disagree with the window (frameDocked, frameShown, tabShown:
+		-- true, false, or the secret value), or the frame refuse to say
+		-- whether it is shown (frameShown = "fails").
 		env.NUM_CHAT_WINDOWS = 10
 		env.Constants = { ChatFrameConstants = { MaxChatWindows = 10 } }
 		env.GENERAL_CHAT_DOCK = {}
@@ -553,23 +598,47 @@ function Mock.NewClient(spec)
 			return window ~= nil and (window.shown or window.docked ~= nil)
 		end
 		local function ChatFrameFor(index, window)
-			window.frame = {
+			window.frame = setmetatable({
 				messageTypeList = {}, channelList = {},
 				GetID = function() return index end,
-				IsShown = function() return window.shown end,
+				IsShown = function()
+					if window.frameShown == "fails" then error("IsShown is not available now") end
+					if window.frameShown ~= nil then return window.frameShown end
+					return window.shown and true or false
+				end,
 				AddMessage = function(_, text) window.lines[#window.lines + 1] = text end,
-			}
+			}, { __index = function(_, key)
+				if key ~= "isDocked" then return nil end
+				if rawequal(window.frameDocked, SECRET) then return SECRET end
+				if window.frameDocked ~= nil then return window.frameDocked and 1 or nil end
+				return window.docked ~= nil and 1 or nil
+			end })
 			env["ChatFrame" .. index] = window.frame
+			env["ChatFrame" .. index .. "Tab"] = {
+				IsShown = function()
+					if window.tabShown ~= nil then return window.tabShown end
+					return (window.shown or window.docked ~= nil) and true or false
+				end,
+			}
 		end
 		for index, window in pairs(client.windows) do ChatFrameFor(index, window) end
 		env.FCF_IsChatWindowIndexActive = ChatActive
 		env.GetChatWindowInfo = function(index)
+			-- A test seam: the client refuses to describe its chat windows.
+			if client.chatInfoBroken then error("GetChatWindowInfo is not available now") end
 			if index == 1 then return "General", 14, 1, 1, 1, 1, true, false, 1, false end
 			if index == 2 then return "Combat Log", 14, 1, 1, 1, 1, false, false, 2, false end
 			if index == 3 then return "Voice", 14, 1, 1, 1, 1, false, false, 3, false end
 			local window = client.windows[index]
 			if not window then return "", 14, 1, 1, 1, 1, false, false, nil, false end
-			return window.name, 14, 1, 1, 1, 1, window.shown, false, window.docked, false
+			-- Test seams: the saved setup lags behind the frames and calls the
+			-- window neither shown nor docked, or the client keeps one of the
+			-- two to itself (chatInfoSecret = "shown" or "docked").
+			if client.chatInfoStale then return window.name, 14, 1, 1, 1, 1, false, false, nil, false end
+			local shown, docked = window.shown, window.docked
+			if client.chatInfoSecret == "shown" then shown = SECRET end
+			if client.chatInfoSecret == "docked" then docked = SECRET end
+			return window.name, 14, 1, 1, 1, 1, shown, false, docked, false
 		end
 		-- Opening, closing or selecting a chat window from an addon taints the
 		-- game's chat edit box: only the player may (client.asPlayer), every
@@ -579,14 +648,23 @@ function Mock.NewClient(spec)
 			client.addonChatWrites = (client.addonChatWrites or 0) + 1
 			client.addonChatWriteNames = client.addonChatWriteNames or {}
 			client.addonChatWriteNames[#client.addonChatWriteNames + 1] = name
+			-- The chat edit box is the addon's from now on, until a reload.
+			client.chatMarked = true
 		end
+		-- A reload of the interface: the session ends, and the mark with it.
+		-- A test that sees reloadAsked logs the client out and in again.
+		env.C_UI = { Reload = function()
+			client.reloadAsked = (client.reloadAsked or 0) + 1
+			client.chatMarked = false
+		end }
 		env.NEW_CHAT_WINDOW = "New Window"
 		-- The first window not in use, cleared, named, docked and selected;
 		-- nothing when all ten are in use.
 		env.FCF_OpenNewWindow = function(name, noDefaultChannels)
-			ChatWrite("FCF_OpenNewWindow")
 			for index = 4, env.NUM_CHAT_WINDOWS do
 				if not ChatActive(index) then
+					-- Only a window really opened writes to the chat's state.
+					ChatWrite("FCF_OpenNewWindow")
 					local window = client.windows[index] or {}
 					local dock = 3
 					for _, other in pairs(client.windows) do
@@ -640,6 +718,8 @@ function Mock.NewClient(spec)
 		env.COMBATLOG_DISHONORGAIN = "%s meurt, victoire déshonorante."
 
 		env.Enum = {
+			-- How the game rates a unit against the player, as its target frame colours a level.
+			RelativeContentDifficulty = { Trivial = 0, Easy = 1, Fair = 2, Difficult = 3, Impossible = 4 },
 			AddOnRestrictionType = { Combat = 0, Encounter = 1, ChallengeMode = 2, PvPMatch = 3, Map = 4, Chat = 5 },
 			AddOnRestrictionState = { Inactive = 0, Activating = 1, Active = 2 },
 			SendAddonMessageResult = RESULT,
@@ -749,6 +829,17 @@ function Mock.NewClient(spec)
 			return guid ~= nil and guid:find("^Player") ~= nil
 		end
 		env.UnitIsPVP = function() return true end
+		-- The rating of a unit the client knows: what the test gave the player
+		-- (facts.con, a number of the enum above), nothing otherwise.
+		env.C_PlayerInfo = { GetContentDifficultyCreatureForPlayer = function(unit)
+			local facts = factsOf(unit)
+			return facts and facts.con or nil
+		end }
+		-- The art of the client: the atlases a test says it has.
+		env.C_Texture = { GetAtlasInfo = function(atlas)
+			if st.atlases and st.atlases[atlas] then return { width = 16, height = 16 } end
+			return nil
+		end }
 		env.UnitTokenFromGUID = function(guid)
 			if rawequal(guid, SECRET) then error("bad argument #1 to 'UnitTokenFromGUID' (secret)") end
 			for _, unit in ipairs({ "player", "pet", "target" }) do
@@ -794,6 +885,9 @@ function Mock.NewClient(spec)
 			return facts.name, RANKS[entry.rank + 1], entry.rank, 60, facts.class, st.zone, "", "", online, 0,
 				facts.class, 0, 0, false, false, 0, entry.guid
 		end
+		-- The guild's ranks, the first one first, as the guild panel lists them.
+		env.GuildControlGetNumRanks = function() return st.guild and #RANKS or 0 end
+		env.GuildControlGetRankName = function(order) return st.guild and RANKS[order] or nil end
 		env.C_GuildInfo = {
 			GuildRoster = function() later(0.3, function() client.fire("GUILD_ROSTER_UPDATE") end) end,
 			GuildControlGetRankFlags = function(rankOrder)

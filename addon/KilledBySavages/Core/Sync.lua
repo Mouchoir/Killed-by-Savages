@@ -147,14 +147,16 @@ end
 
 -- Whether a member can take a whisper: the server did not answer lately
 -- that nobody by that name was playing, or the member spoke to us since.
+-- Any message of theirs counts, not only a hello: back within ten minutes
+-- of its last one, a member does not say it again.
 -- The roster's online flag is not trusted here: it lags behind logins by
 -- up to a roster rebuild, while the server's answer is immediate and sure.
 local function MemberAround(canon)
 	if not canon then return false end
 	local goneAt = gone[canon]
 	if not goneAt or Now() - goneAt >= GONE_WINDOW then return true end
-	local peer = peers[canon]
-	return peer ~= nil and peer.at > goneAt
+	local heardAt = heard[canon]
+	return heardAt ~= nil and heardAt > goneAt
 end
 
 -- The holder's "First Last" name of an author tail: its roster entry.
@@ -247,6 +249,12 @@ local function SendGuild(kind, text, priority)
 	return Enqueue({ kind = kind, text = text, channel = "GUILD", priority = priority or 1 })
 end
 
+-- A word to the guild from another module (the rule on ranks).
+function Sync.Say(kind, text, priority)
+	if not Identity.InGuild() then return false end
+	return SendGuild(kind, text, priority)
+end
+
 local function SendWhisper(kind, text, target, priority, expires, onSent, onDrop)
 	if #text > 255 then
 		ns.Count("sync.tooLong." .. kind)
@@ -267,15 +275,35 @@ local function OwnHead()
 	return author and author.head or 0
 end
 
+-- Every journal held, our own included, as an inventory lists them.
+local function HeldEntries()
+	local entries = {}
+	for guid, author in pairs(ns.db.authors) do
+		local tail = Util.Tail(guid)
+		if tail and (author.head or 0) > 0 then
+			local own = ns.db.characters[guid]
+			entries[#entries + 1] = {
+				tail = tail, head = author.head, count = author.count or 0,
+				lifeHK = author.own and own and own.lifeHK or nil,
+			}
+		end
+	end
+	table.sort(entries, function(a, b) return a.tail < b.tail end)
+	return entries
+end
+
 function Sync.SendHello(reason)
 	local me = Me()
 	if not Identity.InGuild() or not me.tail then return false end
 	local char = Char()
 	helloDueAt = nil
 	-- A /reload soon after a hello says nothing new, unless the addon was
-	-- updated in between: the guild hears of the new version at once.
+	-- updated in between: the guild hears of the new version at once. A
+	-- member that holds nothing says hello every time: it has no inventory
+	-- to send, and with no hello either it would log in without a word, so
+	-- that no holder would tell it what there is to ask for.
 	if reason ~= "recovery" and reason ~= "import" and char.helloVersion == ns.VERSION
-		and Now() - (char.lastHello or 0) < HELLO_MIN_GAP then
+		and Now() - (char.lastHello or 0) < HELLO_MIN_GAP and #HeldEntries() > 0 then
 		ns.Count("sync.helloSkipped")
 		ns.Fire("SyncChanged")
 		return false
@@ -314,22 +342,6 @@ local function SendList(kind, entries)
 		sent = sent + 1
 	end
 	return sent
-end
-
-local function HeldEntries()
-	local entries = {}
-	for guid, author in pairs(ns.db.authors) do
-		local tail = Util.Tail(guid)
-		if tail and (author.head or 0) > 0 then
-			local own = ns.db.characters[guid]
-			entries[#entries + 1] = {
-				tail = tail, head = author.head, count = author.count or 0,
-				lifeHK = author.own and own and own.lifeHK or nil,
-			}
-		end
-	end
-	table.sort(entries, function(a, b) return a.tail < b.tail end)
-	return entries
 end
 
 -- Who is here and on which version, now and then: a member who logged in
@@ -386,7 +398,9 @@ end
 --------------------------------------------------------------------------------
 
 -- Hellos and profiles state the sender's version. A member who meets a newer
--- release than its own is told in the chat, once per session and version. A
+-- release than its own is told in the chat, once per session and version,
+-- and by a dialog on the board (UI/Window.lua), unless they asked not to be
+-- reminded: of that release, or of any (settings.updateSkip, .updates). A
 -- hello from an older version gets ours back (V) after a random pause, unless
 -- someone states as new a version first: a member who logs in after everyone
 -- who updated still hears of it. At login the profiles held tell it too,
@@ -424,6 +438,13 @@ local function OwnNumbers()
 	return own
 end
 
+-- Whether the player wants to be reminded of this newer release: not when
+-- the reminders are off, nor of the one release they set aside.
+function Sync.Reminds(version)
+	local settings = ns.db.settings
+	return settings.updates ~= false and settings.updateSkip ~= version
+end
+
 -- Someone runs this version. Public: it was said on the guild channel, so
 -- every member online heard it too. False when it is no plain release.
 local function Heard(version, public)
@@ -435,7 +456,8 @@ local function Heard(version, public)
 	if Newer(theirs, own) and not (told and not Newer(theirs, told)) then
 		versionTold = version
 		ns.Count("sync.versionTold")
-		ns.Print(L.UPDATE_AVAILABLE:format(version))
+		if Sync.Reminds(version) then ns.Print(L.UPDATE_AVAILABLE:format(version)) end
+		ns.Fire("NewerVersion", version)
 	end
 	return true
 end
@@ -474,9 +496,31 @@ local function ScanProfiles()
 	if best then Heard(best, false) end
 end
 
--- The newer version the player was told of, for /kbs status.
+-- The newer release heard of this session, if any: /kbs status and the
+-- Options tab's version line say it whatever the reminders.
 function Sync.NewerVersion()
 	return versionTold
+end
+
+-- The same, only while the player wants to be reminded of it: for the
+-- board's dialog and the minimap button.
+function Sync.Reminder()
+	if versionTold and Sync.Reminds(versionTold) then return versionTold end
+	return nil
+end
+
+-- No more reminder of this release; the next one is announced.
+function Sync.SkipVersion(version)
+	ns.db.settings.updateSkip = version
+end
+
+-- Reminders on or off. Asked for again, they come for every release, the
+-- one set aside included.
+function Sync.SetReminders(on)
+	local settings = ns.db.settings
+	settings.updates = on and true or false
+	if on then settings.updateSkip = nil end
+	ns.Fire("SettingsChanged")
 end
 
 -- The newest release anyone runs, ours included: what up to date means.
@@ -600,10 +644,12 @@ local function NoteHolder(tail, holder, head, count)
 	if not seen or head >= seen.head then seenHead[tail] = { head = head, at = Now() } end
 end
 
-local function InFlightFor(holder)
+-- The requests in flight to a holder, by its canon name: a request keeps
+-- the holder's name as the roster spells it.
+local function InFlightFor(canon)
 	local n = 0
 	for _, request in pairs(requests) do
-		if request.holder == holder then n = n + 1 end
+		if Identity.Canon(request.holder) == canon then n = n + 1 end
 	end
 	return n
 end
@@ -1092,22 +1138,34 @@ local function OnHello(sender, fields)
 		return
 	end
 	local canon = Identity.Canon(sender)
-	peers[canon] = { tail = tail, head = head, lifeHK = lifeHK, playerKey = fields[7], version = fields[3], at = Now(), name = sender }
+	local before = peers[canon]
+	local peer = { tail = tail, head = head, lifeHK = lifeHK, playerKey = fields[7], version = fields[3], at = Now(), name = sender }
+	peers[canon] = peer
 	Heard(fields[3], true)
 	AnswerVersion(Numbers(fields[3]))
-	-- A hello with no inventory behind it is a member who holds nothing yet:
-	-- tell them everything we hold, unless their inventory shows up (and
-	-- then says what they lack).
-	local helloAt = Now()
-	Util.After(INVENTORY_WAIT, "advance-newcomer", function()
-		local peer = peers[canon]
-		if not peer or peer.at ~= helloAt or peer.inventoryAt then return end
-		local entries = {}
-		for _, entry in ipairs(HeldEntries()) do
-			if entry.tail ~= tail then entries[#entries + 1] = entry end
-		end
-		if #entries > 0 then ScheduleAdvance(entries) end
-	end)
+	-- A hello that announces no journal, with no inventory behind it, is a
+	-- member who holds nothing yet: tell them everything we hold, unless
+	-- their inventory shows up (and then says what they lack). A hello that
+	-- announces a journal is not a newcomer's: the member held that journal
+	-- at login and said its inventory then. It comes now and then as the
+	-- journal grows, after a crash, after an import; when it comes while a
+	-- newcomer's answer waits (an import right after a first login), the
+	-- answer stays due.
+	if head == 0 then
+		local helloAt = Now()
+		peer.emptyAt = helloAt
+		Util.After(INVENTORY_WAIT, "advance-newcomer", function()
+			local latest = peers[canon]
+			if not latest or latest.emptyAt ~= helloAt or latest.inventoryAt then return end
+			local entries = {}
+			for _, entry in ipairs(HeldEntries()) do
+				if entry.tail ~= tail then entries[#entries + 1] = entry end
+			end
+			if #entries > 0 then ScheduleAdvance(entries) end
+		end)
+	elseif before then
+		peer.emptyAt, peer.inventoryAt = before.emptyAt, before.inventoryAt
+	end
 	Compare(sender, { { tail = tail, head = head, count = head, lifeHK = lifeHK } })
 	ns.Count("sync.helloReceived")
 	ns.Fire("PeerSeen", canon, peers[canon])
@@ -1175,6 +1233,25 @@ local function OnRecord(sender, tail, seq, text)
 	end
 end
 
+-- A member says the role of another character of its player, which cannot
+-- speak while it is offline. Taken when both said of themselves, each in
+-- its own profile, that they are the same player's; the character says it
+-- again itself the next time it logs in.
+local function OnCharacterRole(sender, tail, role)
+	local member = Identity.Member(sender)
+	local speaker = member and member.tail and ns.db.authors[GuidOf(member.tail)]
+	local author = ns.db.authors[GuidOf(tail)]
+	local key = speaker and speaker.profileVerified and speaker.profile and speaker.profile.playerKey
+	if not (key and author and author.profileVerified and author.profile and author.profile.playerKey == key
+		and Identity.MemberByTail(tail)) then
+		ns.Count("sync.roleRefused")
+		return
+	end
+	author.profile.role = Identity.IsRole(role) and role or nil
+	ns.Count("sync.roleReceived")
+	ns.Fire("ProfileChanged", GuidOf(tail))
+end
+
 -- A member is here and runs this version: kept for the session, and on
 -- its profile, which was the author's own word too.
 local function OnPresence(sender, version, playerKey)
@@ -1222,6 +1299,8 @@ local function OnAddonMessage(prefix, text, channel, sender)
 				if kind == "I" then
 					local peer = peers[Identity.Canon(sender)]
 					if peer then peer.inventoryAt = Now() end
+					-- Every login sends one, even when its hello is not due yet.
+					ns.Fire("InventoryHeard", Identity.Canon(sender))
 				end
 				Compare(sender, ParseList(body), kind == "I")
 				ns.Count("sync.listReceived")
@@ -1238,6 +1317,11 @@ local function OnAddonMessage(prefix, text, channel, sender)
 	elseif kind == "O" then
 		local version, playerKey = text:match("^O%^([^%^]+)%^?([^%^]*)$")
 		if version then OnPresence(sender, version, playerKey or "") end
+	elseif kind == "G" then
+		if ns.Ranks then ns.Ranks.OnRule(sender, text) end
+	elseif kind == "C" then
+		local tail, role = text:match("^C%^([%d%-%x]+)%^(%a?)$")
+		if tail then OnCharacterRole(sender, tail, role) end
 	elseif kind == "Q" then
 		local tail, page = text:match("^Q%^([%d%-%x]+)%^(%d+)$")
 		if tail then OnRequest(sender, tail, tonumber(page)) end
@@ -1433,6 +1517,16 @@ local function OnProfileEdited()
 	end
 end
 
+-- The role of another character of the account: kept on the profile held
+-- here for it, and said to the guild in its place.
+local function OnCharacterRoleEdited(guid, role)
+	local author = ns.db.authors[guid]
+	if author and author.profile then author.profile.role = role end
+	ns.Fire("ProfileChanged", guid)
+	local tail = Util.Tail(guid)
+	if tail and Identity.InGuild() then SendGuild("C", ("C^%s^%s"):format(tail, role or ""), 1) end
+end
+
 -- History imported after the login hello went out: a new hello says the head.
 local function OnImported()
 	if lastHeadAnnounced ~= nil and Identity.InGuild() then Sync.SendHello("import") end
@@ -1442,6 +1536,8 @@ ns.On("CHAT_MSG_ADDON", OnAddonMessage)
 ns.Hook("Login", OnLogin)
 ns.Hook("AliasChanged", OnProfileEdited)
 ns.Hook("RoleChanged", OnProfileEdited)
+ns.Hook("MainChanged", OnProfileEdited)
+ns.Hook("CharacterRoleChanged", OnCharacterRoleEdited)
 ns.Hook("RecordAdded", OnOwnRecord)
 ns.Hook("Imported", OnImported)
 ns.Hook("CounterJump", OnCounterJump)

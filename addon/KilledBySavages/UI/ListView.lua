@@ -30,8 +30,11 @@ end
 --   sortBy = the row field to sort on when it is not the one shown (a time shown as text),
 --   classColor = true (the row's class) or the row field holding the class file to colour the cell with,
 --   tip = a line under the header's name when the mouse rests on it,
+--   mark = the row field that, when set, puts a small orange square before the text,
 --   button = { text, onClick = fn(data), selected = fn(data), selectedText }: an action on the row's
---   item, a dark button lit and inert on the rows where it is already done, saying selectedText there }
+--   item, a dark button lit and inert on the rows where it is already done, saying selectedText there;
+--   again = true lets a lit button act once more (to undo), enabled = fn(data) rests it on the rows
+--   it cannot act on, tip = fn(data) gives its tooltip's title and line }
 -- fill(row, data) is the caller's; rows carry one FontString per column.
 function ListView.New(parent, columns, options)
 	options = options or {}
@@ -121,16 +124,30 @@ function ListView.New(parent, columns, options)
 		local cx = 6
 		for index, column in ipairs(columns) do
 			if column.button then
-				local button = Theme.DarkButton(row, column.button.text, column.width - 8, ROW - 2)
+				local spec = column.button
+				local button = Theme.DarkButton(row, spec.text, column.width - 8, ROW - 2)
 				-- A thinner border than the filters': its corners fit the row.
 				Theme.Panel(button, 10, 3, Theme.COLORS.buttonBg, Theme.COLORS.buttonBorder)
 				button:SetPoint("LEFT", cx + 4, 0)
 				button.label:SetFontObject("GameFontHighlightSmall")
 				button:SetScript("OnClick", function()
 					local data = row.data
-					if not data or (column.button.selected and column.button.selected(data)) then return end
-					Util.Guard("list-button", column.button.onClick, data)
+					if not data or (spec.enabled and not spec.enabled(data)) then return end
+					if spec.selected and spec.selected(data) and not spec.again then return end
+					Util.Guard("list-button", spec.onClick, data)
 				end)
+				if spec.tip then
+					button:SetScript("OnEnter", function(self)
+						local data = row.data
+						if not data then return end
+						local head, body = spec.tip(data)
+						if head and Theme.TooltipStart(self, head) then
+							if body then Theme.TooltipLine(body) end
+							Theme.TooltipShow()
+						end
+					end)
+					button:SetScript("OnLeave", function() Theme.TooltipHide() end)
+				end
 				row.cells[index] = { button = button }
 			elseif column.icon then
 				local icon = row:CreateTexture(nil, "ARTWORK")
@@ -151,6 +168,14 @@ function ListView.New(parent, columns, options)
 				end
 				text:SetWidth(column.width - 8)
 				row.cells[index] = { text = text }
+				if column.mark then
+					local mark = row:CreateTexture(nil, "ARTWORK")
+					mark:SetSize(6, 6)
+					mark:SetPoint("LEFT", cx + 6, 0)
+					mark:SetColorTexture(Theme.COLORS.warn[1], Theme.COLORS.warn[2], Theme.COLORS.warn[3], 1)
+					mark:Hide()
+					row.cells[index].mark = mark
+				end
 			end
 			local text = row.cells[index].text
 			if text then
@@ -177,13 +202,21 @@ function ListView.New(parent, columns, options)
 		for index, column in ipairs(columns) do
 			local cell = row.cells[index]
 			if cell.button then
-				local done = column.button.selected ~= nil and column.button.selected(data) == true
+				local spec = column.button
+				local done = spec.selected ~= nil and spec.selected(data) == true
 				cell.button:SetSelected(done)
-				cell.button:SetLabel(done and column.button.selectedText or column.button.text)
+				cell.button:SetLabel(done and spec.selectedText or spec.text)
+				-- A button that cannot act on this row rests, dimmed.
+				cell.button.resting = spec.enabled ~= nil and spec.enabled(data) ~= true
+				if cell.button.SetAlpha then cell.button:SetAlpha(cell.button.resting and 0.35 or 1) end
 			else
 				local value = data[column.key]
 				if column.format then value = column.format(value, data) end
 				cell.text:SetText(value == nil and "" or tostring(value))
+				if cell.mark then
+					cell.mark.on = data[column.mark] and true or false
+					if cell.mark.on then cell.mark:Show() else cell.mark:Hide() end
+				end
 				if column.icon == "class" then
 					Theme.ClassIcon(cell.icon, data.class)
 				elseif column.icon == "race" then

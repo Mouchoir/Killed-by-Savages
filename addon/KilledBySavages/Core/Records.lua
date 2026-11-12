@@ -9,18 +9,24 @@ local _, ns = ...
 -- between guild members unchanged, so the format is frozen from v0.1: a
 -- client ignores record types and versions it does not know.
 --
---   K1  kill      seq;t;bucket;how;vtail;vname;vclass;vrace;vlevel;mapID;x;y;guild;lifeHK;sub
+--   K1  kill      seq;t;bucket;how;vtail;vname;vclass;vrace;vlevel;mapID;x;y;guild;lifeHK;sub;vcon
+--                 (vcon since 1.0.3: how the game rated the victim against
+--                 the author, T E F D I, or S for a level it hid; see Identity.Con)
 --   B1  backfill  the same fields: a kill the character's probe saw before
 --                 the addon's first count (see Import), counted like a kill
 --                 at its own time, but outside the chain: lifeHK repeats the
 --                 record before it, since the count the addon started from
 --                 already held this HK
---   D1  death     seq;t;bucket;ktail;kname;kclass;krace;kkind;spell;mapID;x;y;lifeHK;sub
+--   D1  death     seq;t;bucket;ktail;kname;kclass;krace;kkind;spell;mapID;x;y;lifeHK;sub;klevel;kcon
+--                 (klevel and kcon since 1.0.3: the killer's level and rating,
+--                 when the client still knew it as a unit)
 --   M1  match     seq;t;instanceID;duration;winner;hk;kb;deaths;honor;damage;healing;lifeHK;live;mapID;lines
 --   C1  backfill  the same fields: a match the probe saw before the addon's
 --                 first count, credited like a match, outside the chain
 --   X1  counter   seq;t;bucket;fromHK;toHK            (HKs the server counted with no detail)
---   P1  profile   name;class;race;realm;playerKey;alias;level;baselineHK;lifeHK;version
+--   P1  profile   name;class;race;realm;playerKey;alias;level;baselineHK;lifeHK;version;role;main
+--                 (role since 1.0.1; main since 1.0.3: the tail of the player's
+--                 main character, "-" when its player names none)
 --
 -- A match record is the end-of-battleground scoreboard: my own row, then
 -- one line per guild teammate on the board (tail:name:kb:hk:deaths:honor,
@@ -58,6 +64,13 @@ local function Str(text)
 	return text
 end
 
+-- A character level, or nil for anything else.
+local function Level(text)
+	local level = Num(text)
+	if level and level >= 1 and level <= MAX_LEVEL and level % 1 == 0 then return level end
+	return nil
+end
+
 local function Field(value)
 	if value == nil then return "" end
 	if type(value) == "number" then
@@ -89,12 +102,12 @@ end
 
 function Records.EncodeKill(r)
 	return Join(r.backfill and "B1" or "K1", r.seq, r.t, r.bucket, r.how, r.vtail, r.vname, r.vclass, r.vrace, r.vlevel,
-		r.mapID, r.x, r.y, r.guild, r.lifeHK, r.sub)
+		r.mapID, r.x, r.y, r.guild, r.lifeHK, r.sub, r.vcon)
 end
 
 function Records.EncodeDeath(r)
 	return Join("D1", r.seq, r.t, r.bucket, r.ktail, r.kname, r.kclass, r.krace, r.kkind, r.spell,
-		r.mapID, r.x, r.y, r.lifeHK, r.sub)
+		r.mapID, r.x, r.y, r.lifeHK, r.sub, r.klevel, r.kcon)
 end
 
 -- One scoreboard line: tail:name:kb:hk:deaths:honor. Built from cleaned
@@ -132,7 +145,8 @@ function Records.EncodeCounter(r)
 end
 
 function Records.EncodeProfile(p)
-	return Join("P1", p.name, p.class, p.race, p.realm, p.playerKey, p.alias, p.level, p.baselineHK, p.lifeHK, p.version, p.role)
+	return Join("P1", p.name, p.class, p.race, p.realm, p.playerKey, p.alias, p.level, p.baselineHK, p.lifeHK, p.version, p.role,
+		p.main or "-")
 end
 
 function Records.Encode(r)
@@ -154,12 +168,16 @@ local function DecodeFields(f)
 			type = "K", backfill = kind == "B1" or nil, seq = Num(f[2]), t = Num(f[3]), bucket = Str(f[4]), how = Str(f[5]),
 			vtail = Str(f[6]), vname = Str(f[7]), vclass = Str(f[8]), vrace = Str(f[9]), vlevel = Num(f[10]),
 			mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), guild = Str(f[14]), lifeHK = Num(f[15]), sub = Str(f[16]),
+			-- Since 1.0.3, last. A rating this version does not know reads as none.
+			vcon = ns.Identity.CONS[f[17]] and f[17] or nil,
 		}
 	elseif kind == "D1" then
 		return {
 			type = "D", seq = Num(f[2]), t = Num(f[3]), bucket = Str(f[4]),
 			ktail = Str(f[5]), kname = Str(f[6]), kclass = Str(f[7]), krace = Str(f[8]), kkind = Str(f[9]),
 			spell = Str(f[10]), mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), lifeHK = Num(f[14]), sub = Str(f[15]),
+			-- Since 1.0.3, last. A level out of range or an unknown rating reads as none.
+			klevel = Level(f[16]), kcon = ns.Identity.CONS[f[17]] and f[17] or nil,
 		}
 	elseif kind == "M1" or kind == "C1" then
 		return {
@@ -189,12 +207,21 @@ function Records.DecodeProfile(text)
 	if type(text) ~= "string" then return nil end
 	local f = Split(text)
 	if f[1] ~= "P1" then return nil end
+	-- Since 1.0.3, last: the player's main character, by its tail; false when
+	-- its player names none; nil from a version that says nothing of it.
+	local main
+	if f[13] == "-" then
+		main = false
+	elseif type(f[13]) == "string" then
+		main = f[13]:match("^%d+%-%x+$")
+	end
 	return {
 		name = Str(f[2]), class = Str(f[3]), race = Str(f[4]), realm = Str(f[5]), playerKey = Str(f[6]),
 		alias = Str(f[7]), level = Num(f[8]), baselineHK = Num(f[9]), lifeHK = Num(f[10]), version = Str(f[11]),
 		-- Since 1.0.1, at the end: versions before read the fields by
 		-- position and never look this far.
 		role = ns.Identity.IsRole(f[12]) and f[12] or nil,
+		main = main,
 	}
 end
 
@@ -577,7 +604,7 @@ function Records.OwnProfile()
 	local profile = {
 		name = me.name, class = me.class, race = me.race, realm = me.realm, playerKey = me.playerKey,
 		alias = ns.Identity.Alias(), level = me.level, baselineHK = char.baselineHK, lifeHK = char.lifeHK,
-		version = ns.VERSION, role = ns.Identity.Role(),
+		version = ns.VERSION, role = ns.Identity.Role(), main = Util.Tail(ns.Identity.Main()) or false,
 	}
 	local author = Records.Author(me.guid)
 	author.own = true

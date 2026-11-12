@@ -15,6 +15,10 @@ ns.VERSION = (C_AddOns and Util.Fn(C_AddOns.GetAddOnMetadata) and Util.Get(C_Add
 	or (Util.Fn(GetAddOnMetadata) and Util.Get(GetAddOnMetadata, ADDON_NAME, "Version"))
 	or "0.0.0"
 
+-- The addon's Discord: new versions, bug reports, ideas. An addon cannot
+-- open a browser, so the link sits in a box of the Options tab, to copy.
+ns.DISCORD_URL = "https://discord.gg/wqYecPR8yC"
+
 function ns.Print(text)
 	if DEFAULT_CHAT_FRAME then
 		DEFAULT_CHAT_FRAME:AddMessage(L.CHAT_PREFIX .. tostring(text))
@@ -182,6 +186,8 @@ local function Help()
 	ns.Print(L.HELP_OPEN)
 	ns.Print(L.HELP_STATUS)
 	ns.Print(L.HELP_OPTIONS)
+	ns.Print(L.HELP_DISCORD)
+	ns.Print(L.HELP_PREVIEW)
 	ns.Print(L.HELP_IMPORT)
 	ns.Print(L.HELP_DEBUG)
 end
@@ -207,6 +213,14 @@ function ns.OpenOptions()
 	ns.UI.SelectTab("options")
 end
 
+-- The Discord link: said in the chat, and selected in its box of the
+-- Options tab, where the copy shortcut takes it.
+function ns.OpenDiscord()
+	ns.Print(L.DISCORD_CHAT:format(ns.DISCORD_URL))
+	ns.OpenOptions()
+	if ns.UI.FocusDiscord then ns.UI.FocusDiscord() end
+end
+
 local function HandleSlash(input)
 	local command = (input or ""):match("^%s*(%S*)"):lower()
 	if command == "" then
@@ -215,6 +229,10 @@ local function HandleSlash(input)
 		Status()
 	elseif command == "options" or command == "config" then
 		ns.OpenOptions()
+	elseif command == "discord" then
+		ns.OpenDiscord()
+	elseif command == "preview" then
+		ns.Killfeed.Preview()
 	elseif command == "debug" then
 		Debug()
 	elseif command == "import" then

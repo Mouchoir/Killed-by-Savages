@@ -209,6 +209,20 @@ function Filters.New(parent, parts, read, onChange)
 		end
 	end
 
+	if parts.ranks then
+		-- Only the rows marked for a guild rank to give. The button shows
+		-- for the members allowed to see those marks (SetRanksShown).
+		local button = SmallButton(frame, L.FILTER_RANKS, 118)
+		Place(button, 10)
+		button:SetScript("OnClick", function()
+			bar.ranks = (not bar.ranks) or nil
+			Changed()
+		end)
+		Tip(button, L.FILTER_RANKS, L.FILTER_RANKS_TIP)
+		button:Hide()
+		bar.ranksButton = button
+	end
+
 	-- The last part placed from the left: the count must not run under it.
 	bar.lastPart = last
 
@@ -227,7 +241,21 @@ function Filters.New(parent, parts, read, onChange)
 
 	function bar:Active()
 		return self.text ~= "" or next(self.classes) ~= nil or next(self.roles) ~= nil
-			or self.minLevel ~= nil or self.maxLevel ~= nil
+			or self.minLevel ~= nil or self.maxLevel ~= nil or self.ranks == true
+	end
+
+	-- The rank button comes and goes with the right to see the marks; gone,
+	-- it takes its filter with it.
+	function bar:SetRanksShown(shown)
+		if not self.ranksButton then return end
+		if shown then
+			self.ranksButton:Show()
+		else
+			self.ranksButton:Hide()
+			self.ranks = nil
+		end
+		self.ranksShown = shown and true or false
+		self:Update()
 	end
 
 	-- What is chosen shows: the classes left out fade, the roles chosen
@@ -242,6 +270,7 @@ function Filters.New(parent, parts, read, onChange)
 		for role, button in pairs(self.roleButtons) do
 			button:SetSelected(self.roles[role] == true)
 		end
+		if self.ranksButton then self.ranksButton:SetSelected(self.ranks == true) end
 		if self:Active() then
 			self.reset:Show()
 		else
@@ -302,6 +331,7 @@ function Filters.New(parent, parts, read, onChange)
 			local keep = true
 			if anyClass and not self.classes[ReadClass(row) or false] then keep = false end
 			if keep and anyRole and not self.roles[ReadRole(row) or false] then keep = false end
+			if keep and self.ranks and not row.rankMark then keep = false end
 			if keep and (low or high) then
 				local level = ReadLevel(row)
 				if type(level) ~= "number" or (low and level < low) or (high and level > high) then keep = false end
@@ -343,7 +373,7 @@ function Filters.New(parent, parts, read, onChange)
 
 	function bar:Reset()
 		self.classes, self.roles = {}, {}
-		self.minLevel, self.maxLevel = nil, nil
+		self.minLevel, self.maxLevel, self.ranks = nil, nil, nil
 		self.text = ""
 		-- The boxes say it too; their handlers then find nothing new.
 		if self.searchBox then self.searchBox:SetText("") end

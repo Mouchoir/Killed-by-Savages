@@ -38,6 +38,10 @@ local function Register()
 			if ok and guild then
 				tooltip:AddLine(L.MINIMAP_WEEK:format(guild.kills, guild.distinct), 0.93, 0.84, 0.66)
 			end
+			-- Our own addon behind a guildmate's: said here too, in orange,
+			-- while the player wants to be reminded of it.
+			local newer = ns.Sync and ns.Sync.Reminder()
+			if newer then tooltip:AddLine(L.UPDATE_NOTICE:format(newer), Theme.Color("warn")) end
 			tooltip:AddLine(L.MINIMAP_TOOLTIP_LEFT, 0.8, 0.8, 0.8)
 			tooltip:AddLine(L.MINIMAP_TOOLTIP_RIGHT, 0.8, 0.8, 0.8)
 		end,

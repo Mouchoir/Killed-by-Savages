@@ -167,6 +167,9 @@ function Identity.UpdateRoster(force)
 		end
 	end
 	roster.byCanon, roster.byTail, roster.count = byCanon, byTail, count
+	-- A promotion changes the roster and our own rank together.
+	local guild, rankName, rankIndex = Get(GetGuildInfo, "player")
+	if guild ~= nil and guild ~= SECRET then me.rankName, me.rankIndex = rankName, rankIndex end
 	if ns.Fire then ns.Fire("RosterUpdated") end
 	return true
 end
@@ -183,6 +186,44 @@ end
 
 function Identity.MemberByTail(tail)
 	return tail and roster.byTail[tail] or nil
+end
+
+-- The guild's ranks, the first one first: { index, name }, the index
+-- counted from 0 as the roster counts. From the client's own list, else
+-- from the ranks the roster's members hold.
+function Identity.Ranks()
+	local list = {}
+	local count = Get(GuildControlGetNumRanks)
+	if type(count) == "number" and count > 0 and Fn(GuildControlGetRankName) then
+		for order = 1, math.min(count, 20) do
+			local name = Get(GuildControlGetRankName, order)
+			if type(name) == "string" and name ~= "" and name ~= SECRET then
+				list[#list + 1] = { index = order - 1, name = name }
+			end
+		end
+		if #list > 0 then return list end
+	end
+	local seen = {}
+	for _, member in pairs(roster.byCanon) do
+		local index, name = member.rankIndex, member.rankName
+		if type(index) == "number" and type(name) == "string" and name ~= SECRET and not seen[index] then
+			seen[index] = true
+			list[#list + 1] = { index = index, name = name }
+		end
+	end
+	table.sort(list, function(a, b) return a.index < b.index end)
+	return list
+end
+
+-- The rank of the character played now, 0 for the guild's first. The
+-- roster and the client each say it: when they differ, a promotion or a
+-- demotion is on its way, and the lower rank is the one believed.
+function Identity.MyRankIndex()
+	local member = me.tail and roster.byTail[me.tail]
+	local listed = member and type(member.rankIndex) == "number" and member.rankIndex or nil
+	local own = type(me.rankIndex) == "number" and me.rankIndex or nil
+	if listed and own then return math.max(listed, own) end
+	return listed or own
 end
 
 -- The permission table of a guild rank, 0-based index like the roster gives.
@@ -244,6 +285,27 @@ end
 -- Other players
 --------------------------------------------------------------------------------
 
+-- How the game itself rates a unit against the character played, the way
+-- it colours a level on the target frame: T trivial (grey), E easy (green),
+-- F fair (yellow), D difficult (orange), I impossible (red), and S when the
+-- level is hidden, too high to be told (the skull). nil when the client
+-- does not say: the addon rates nothing by itself.
+local CON_LETTER = { Trivial = "T", Easy = "E", Fair = "F", Difficult = "D", Impossible = "I" }
+Identity.CONS = { T = true, E = true, F = true, D = true, I = true, S = true }
+
+function Identity.Con(token, level)
+	if type(level) == "number" and level < 0 then return "S" end
+	local rate = type(C_PlayerInfo) == "table" and Fn(C_PlayerInfo.GetContentDifficultyCreatureForPlayer)
+	local names = type(Enum) == "table" and Enum.RelativeContentDifficulty
+	if not rate or type(names) ~= "table" then return nil end
+	local value = Get(rate, token)
+	if type(value) ~= "number" then return nil end
+	for name, letter in pairs(CON_LETTER) do
+		if names[name] == value then return letter end
+	end
+	return nil
+end
+
 -- What the client tells about a player GUID we are allowed to read.
 function Identity.PlayerFacts(guid)
 	local facts = { kind = Util.GuidKind(guid) }
@@ -257,6 +319,7 @@ function Identity.PlayerFacts(guid)
 	if type(token) == "string" and token ~= SECRET then
 		facts.token = token
 		facts.level = Get(UnitLevel, token)
+		facts.con = Identity.Con(token, facts.level)
 		facts.faction = Get(UnitFactionGroup, token)
 		facts.guild = Get(GetGuildInfo, token)
 	end
@@ -291,21 +354,39 @@ function Identity.IsRole(value)
 	return IS_ROLE[value] == true
 end
 
--- The role of the character played now, nil until one is chosen.
-function Identity.Role()
-	if not (me.guid and ns.db) then return nil end
-	local role = ns.Db.Character(me.guid).role
+-- Whether a character is one of this game account's: its state is kept here.
+function Identity.IsOwn(guid)
+	return type(guid) == "string" and ns.db ~= nil and ns.db.characters[guid] ~= nil
+end
+
+-- The role of one of this account's characters, the one played now when
+-- none is named; nil until one is chosen.
+function Identity.Role(guid)
+	guid = guid or me.guid
+	if not (guid and ns.db) then return nil end
+	local character = ns.db.characters[guid]
+	local role = character and character.role
 	return IS_ROLE[role] and role or nil
 end
 
--- Takes effect at once and goes out with the profile; nil removes it.
-function Identity.SetRole(role)
-	if not (me.guid and ns.db) then return nil end
+-- Takes effect at once; nil removes it. The role of the character played
+-- now goes out with its profile. Another character of the account cannot
+-- speak while it is offline: the one played says its role for it.
+function Identity.SetRole(role, guid)
+	guid = guid or me.guid
+	if not (guid and ns.db) then return nil end
 	role = IS_ROLE[role] and role or nil
-	local character = ns.Db.Character(me.guid)
+	local character = guid == me.guid and ns.Db.Character(guid) or ns.db.characters[guid]
+	if not character then return nil end
 	if character.role == role then return role end
 	character.role = role
-	if ns.Fire then ns.Fire("RoleChanged", role) end
+	if ns.Fire then
+		if guid == me.guid then
+			ns.Fire("RoleChanged", role)
+		else
+			ns.Fire("CharacterRoleChanged", guid, role)
+		end
+	end
 	return role
 end
 
@@ -336,4 +417,27 @@ function Identity.SetAlias(text)
 	ns.db.settings.alias = alias
 	if ns.Fire then ns.Fire("AliasChanged", alias) end
 	return alias
+end
+
+--------------------------------------------------------------------------------
+-- Main character of a player
+--
+-- Which of its characters a player calls its main: chosen in the Me tab,
+-- kept for the account, and said to the guild in the profile of whichever
+-- of its characters is played. The others are then its alts.
+--------------------------------------------------------------------------------
+
+function Identity.Main()
+	local guid = ns.db and ns.db.settings.main
+	if type(guid) == "string" and Util.Tail(guid) then return guid end
+	return nil
+end
+
+-- Takes effect at once and goes out with the profile; nil says none.
+function Identity.SetMain(guid)
+	if type(guid) ~= "string" or not Util.Tail(guid) then guid = nil end
+	if guid == Identity.Main() then return guid end
+	ns.db.settings.main = guid
+	if ns.Fire then ns.Fire("MainChanged", guid) end
+	return guid
 end

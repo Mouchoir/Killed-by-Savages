@@ -78,7 +78,7 @@ local kill = {
 	vclass = "WARRIOR", vrace = "Orc", vlevel = 16, mapID = 52, x = 0.4321, y = 0.6789, guild = "Savages", lifeHK = 12,
 }
 local text = Records.Encode(kill)
-check("a kill encodes to one line", text == "K1;7;1794009143;w;kb;6938-00ABCDEF;Grol Ashtusk;WARRIOR;Orc;16;52;0.4321;0.6789;Savages;12;", text)
+check("a kill encodes to one line", text == "K1;7;1794009143;w;kb;6938-00ABCDEF;Grol Ashtusk;WARRIOR;Orc;16;52;0.4321;0.6789;Savages;12;;", text)
 local back = Records.Decode(text)
 check("and decodes back", back.type == "K" and back.seq == 7 and back.vname == "Grol Ashtusk" and back.x == 0.4321 and back.lifeHK == 12)
 check("decoding is cached", Records.Decode(text) == back)
@@ -1021,8 +1021,10 @@ check("a member takes the imported journal by whisper", Held(A, F) == 16, Held(A
 check("and the newcomer takes the journals the others hold", Held(F, A) == Held(A, A) and Held(A, A) > 0 and Held(F, B) == Held(B, B),
 	("A %d/%d B %d/%d, requests %d, timeouts %d, busy answers %d"):format(Held(F, A), Held(A, A), Held(F, B), Held(B, B),
 		F.counter("sync.request"), F.counter("sync.requestTimeout"), F.counter("sync.pageBusy")))
-check("a holder with enough going out says so instead of staying silent", F.counter("sync.pageBusy") >= 1 and F.counter("sync.requestTimeout") == 0,
-	F.counter("sync.pageBusy") .. "/" .. F.counter("sync.requestTimeout"))
+-- It asks a holder for one page at a time, so a holder only answers that
+-- it is busy when other members ask it too: that answer has a check of its
+-- own, with the sync fixes of 1.0.3 at the end of this file.
+check("none of its requests is left to time out", F.counter("sync.requestTimeout") == 0, F.counter("sync.requestTimeout"))
 fStatus = F.ns.Sync.Status()
 check("then that it is up to date, the first journals announced once in chat", fStatus.phase == "idle" and fStatus.held >= 2 and fStatus.pagesIn >= 2
 	and F.said("Premiers journaux de guilde") and F.ns.UI.SyncText(fStatus):find("À jour") ~= nil, fStatus.phase .. "/" .. fStatus.held)
@@ -1392,7 +1394,7 @@ local function ChosenNames()
 	local meView = window.tabFrames.me.view
 	local function UseButton()
 		local first = Rows(meView)[1]
-		return first and first.row.cells[6] and first.row.cells[6].button, first and first.row.data
+		return first and first.row.cells[7] and first.row.cells[7].button, first and first.row.data
 	end
 	local function MyPlayerName()
 		for _, row in ipairs(Stats.Players("all", "all")) do
@@ -1441,7 +1443,8 @@ local function ChosenNames()
 end
 ChosenNames()
 UI.SetPeriod("last")
-check("a period without data shows the empty state", window.tabFrames.me.view.empty.shown == true)
+check("a period without data still lists my characters, with nothing to their name", window.tabFrames.me.view.empty.shown ~= true
+	and #Rows(window.tabFrames.me.view) >= 1 and Rows(window.tabFrames.me.view)[1].row.data.kills == 0)
 UI.SetPeriod("all")
 -- The list hands the same buttons back with other data: dressed once, so
 -- refreshed or scrolled rows never draw over what they showed before.
@@ -1593,19 +1596,20 @@ check("a guildmate's kill lands there too", #feedTab.lines == before + 1 and fee
 	and feedLine:find("Zaljin Darkspear", 1, true) ~= nil, feedLine)
 check("on, nothing goes to the main chat", not ChatSince(A, chatMark, "Zaljin Darkspear"))
 
--- A death of mine: the killer comes first, with its score on me.
+-- A death of mine: the member still comes first, "was killed by", and the
+-- score keeps its order, the member's kills on the enemy then the enemy's.
 before = #feedTab.lines
 local gruk = A.ns.Util.Tail(HORDE[1].guid)
 A.ns.Records.AppendOwn({ type = "D", t = Mock.Server(), bucket = "w", ktail = gruk, kname = "Gruk Bonecrusher", kclass = "WARRIOR",
 	krace = "Orc", kkind = "p", spell = "Frappe mortelle", mapID = 1424, x = 0.4, y = 0.5, lifeHK = A.state.lifetime })
 advance(1)
 feedAgg = A.ns.Stats.AuthorAggregate(A.guid)
-local deathScore = ("(%d-%d)"):format(feedAgg.killers[gruk] and feedAgg.killers[gruk].count or 0, feedAgg.victims[gruk] and feedAgg.victims[gruk].count or 0)
+local deathScore = ("(%d-%d)"):format(feedAgg.victims[gruk] and feedAgg.victims[gruk].count or 0, feedAgg.killers[gruk] and feedAgg.killers[gruk].count or 0)
 feedLine = feedTab.lines[#feedTab.lines] or ""
-check("a death lands there too, the killer first with its score on me", #feedTab.lines == before + 1
+check("a death lands there too: the member first, killed by its killer, my kills on it then its kills on me", #feedTab.lines == before + 1
 	and feedLine:find("Gruk Bonecrusher", 1, true) ~= nil and feedLine:find("Aldric Stormhand", 1, true) ~= nil
-	and feedLine:find(deathScore, 1, true) ~= nil
-	and feedLine:find("Gruk Bonecrusher", 1, true) < feedLine:find("Aldric Stormhand", 1, true), feedLine)
+	and feedLine:find(deathScore, 1, true) ~= nil and feedLine:find(A.ns.L.KILLFEED_DEATH:match("^%%s (.-) %%s"), 1, true) ~= nil
+	and feedLine:find("Aldric Stormhand", 1, true) < feedLine:find("Gruk Bonecrusher", 1, true), feedLine)
 
 -- A battleground HK names nobody: its match is on the board, not the feed.
 before = #feedTab.lines
@@ -1674,7 +1678,7 @@ local function BattlegroundFeed()
 		krace = "Orc", kkind = "p", spell = "Frappe mortelle", mapID = 1424, x = 0.4, y = 0.5, lifeHK = A.state.lifetime })
 	advance(1)
 	agg = A.ns.Stats.AuthorAggregate(A.guid)
-	local score = ("(%d-%d)"):format(gruksBefore + 1, agg.victims[gruk] and agg.victims[gruk].count or 0)
+	local score = ("(%d-%d)"):format(agg.victims[gruk] and agg.victims[gruk].count or 0, gruksBefore + 1)
 	line = LastLine()
 	check("the score of a line counts the world only", #feedTab.lines == before + 1 and Has(line, score), line)
 end
@@ -1707,7 +1711,7 @@ local function RepeatedDeathFeed()
 	end
 	local function Score(deaths)
 		local agg = A.ns.Stats.AuthorAggregate(B.guid)
-		return ("(%d-%d)"):format(deaths, agg.victims[gruk] and agg.victims[gruk].count or 0)
+		return ("(%d-%d)"):format(agg.victims[gruk] and agg.victims[gruk].count or 0, deaths)
 	end
 	advance(5)
 	local deathsBefore = Deaths()
@@ -1751,8 +1755,11 @@ KillZaljin(A)
 check("a character without the tab gets the lines in the main chat, told once how to make the tab",
 	FeedWindow(A) == nil and CountSince(A, chatMark, "Zaljin Darkspear") == 2 and CountSince(A, chatMark, howTo) == 1)
 
--- The player makes the tab, then closes it: the feed turns off, said once
--- in the main chat, and the next kill goes nowhere.
+-- The player makes the tab, then closes it. One look at a closed tab
+-- settles nothing: the line waits. What comes of it (the feed turns off
+-- when the tab is seen closed again ten seconds later) is checked with the
+-- other doubts, at the end of this file: no time passes here that the
+-- sections below were not written with.
 A.asPlayer(A.env.FCF_OpenNewWindow, A.ns.L.KILLFEED_TAB, true)
 feedTab = FeedWindow(A)
 KillZaljin(A)
@@ -1760,16 +1767,19 @@ A.asPlayer(A.env.FCF_Close, feedTab.frame)
 before = #feedTab.lines
 chatMark = #A.chat
 KillZaljin(A)
-check("closing the tab turns the feed off, said in the main chat", A.db().settings.killfeed == false
-	and ChatSince(A, chatMark, A.ns.L.KILLFEED_CLOSED) and not ChatSince(A, chatMark, "Zaljin Darkspear") and #feedTab.lines == before)
+check("a tab seen closed once turns nothing off: the line waits", A.db().settings.killfeed == true
+	and not ChatSince(A, chatMark, A.ns.L.KILLFEED_CLOSED) and not ChatSince(A, chatMark, "Zaljin Darkspear")
+	and #feedTab.lines == before)
 
--- Ticked again with the tab still closed: the main chat again, with how to
--- make the tab; unticked, no line goes anywhere.
+-- Ticked again with the tab still closed: the main chat, with how to make
+-- the tab, for the line that waited and for the next one; unticked, no
+-- line goes anywhere.
 chatMark = #A.chat
 Tick(A, true)
 KillZaljin(A)
-check("ticked again with no tab, the lines go to the main chat with how to make it", A.db().settings.killfeed == true
-	and FeedWindow(A) == nil and ChatSince(A, chatMark, howTo) and ChatSince(A, chatMark, "Zaljin Darkspear"))
+check("ticked again with no tab, the line that waited and the next go to the main chat with how to make it",
+	A.db().settings.killfeed == true and FeedWindow(A) == nil and ChatSince(A, chatMark, howTo)
+	and CountSince(A, chatMark, "Zaljin Darkspear") == 2, CountSince(A, chatMark, "Zaljin Darkspear"))
 Tick(A, false)
 chatMark = #A.chat
 KillZaljin(A)
@@ -1826,13 +1836,18 @@ check("ticked again, the lines go back to the player's tab", (feedTab.lines[#fee
 	and not ChatSince(A, chatMark, "Zaljin Darkspear"))
 Tick(A, false)
 
--- Closed with no line before the logout: the feed is off all the same.
+-- Closed with no line before the logout: nothing is settled on the way out.
+-- The next login finds the tab the lines went to closed, looks again ten
+-- seconds later, and turns the feed off, said in the main chat.
 A.ns.Killfeed.Enable()
 A.asPlayer(A.env.FCF_Close, FeedWindow(A).frame)
 A.logout()
-check("a tab closed before the logout leaves the feed off", A.saved.settings.killfeed == false)
+check("a tab closed before the logout turns nothing off on the way out", A.saved.settings.killfeed == true)
 A.login()
+chatMark = #A.chat
 advance(130)
+check("the next login finds it still closed and turns the feed off, said in the main chat", A.db().settings.killfeed == false
+	and CountSince(A, chatMark, A.ns.L.KILLFEED_CLOSED) == 1, CountSince(A, chatMark, A.ns.L.KILLFEED_CLOSED))
 check("and no tab opens at the next login", FeedWindow(A) == nil)
 
 -- In a fight the lines go to the tab as ever: nothing waits.
@@ -1847,11 +1862,392 @@ A.ns.Killfeed.Disable()
 check("unticked, the player's tab stays open", FeedWindow(A) == feedTab)
 A.asPlayer(A.env.FCF_Close, feedTab.frame)
 
+-- A tab that stops looking like the feed's is never judged on one look: in
+-- game the feed once turned itself off while its tab sat docked under its
+-- name. The lines wait while the windows are looked at again, ten seconds
+-- apart; the feed turns off only for a tab seen closed twice. These checks
+-- run last, from the end of this file.
+local function FeedTabDoubts()
+	local L = A.ns.L
+	local function Has(hay, needle) return hay:find(needle, 1, true) ~= nil end
+	local function Looks()
+		local out = {}
+		for _, entry in ipairs(A.db().debug.killfeed or {}) do out[#out + 1] = entry.text end
+		return out
+	end
+	local function LastLooks(amount)
+		local looks = Looks()
+		local out = {}
+		for index = math.max(1, #looks - amount + 1), #looks do out[#out + 1] = looks[index] end
+		return table.concat(out, " | ")
+	end
+	local function Counter(name) return A.counter("killfeed." .. name) end
+	local function FeedOn() return A.db().settings.killfeed == true end
+	local function SaidClosed(since) return CountSince(A, since, L.KILLFEED_CLOSED) end
+	local function InMain(since) return CountSince(A, since, "Zaljin Darkspear") end
+	-- A guildmate's kill: a line for the feed, and nothing added to A's own
+	-- journal (after a login its next records would wait two minutes).
+	local function FireLine()
+		A.ns.Fire("RecordStored", B.guid, 1, { type = "K", seq = 1, t = Mock.Server(), bucket = "w", how = "kb",
+			vtail = zaljin, vname = "Zaljin Darkspear", vclass = "SHAMAN", vrace = "Troll", mapID = 1424 }, "")
+	end
+	local function FeedLine()
+		FireLine()
+		advance(1)
+	end
+	local pane, docked
+	local function Lines() return #pane.lines end
+	-- The player makes the feed's tab and ticks the option.
+	local function NewTab()
+		A.asPlayer(A.env.FCF_OpenNewWindow, L.KILLFEED_TAB, true)
+		pane = FeedWindow(A)
+		docked = pane.docked
+		A.ns.Killfeed.Enable()
+	end
+	-- What the client shows between two setups of its chat windows: the tab
+	-- closed and without a name. Then as it was.
+	local function Vanish() pane.name, pane.shown, pane.docked = "", false, nil end
+	local function Restore() pane.name, pane.shown, pane.docked = L.KILLFEED_TAB, true, docked end
+	local function ClosePane() A.asPlayer(A.env.FCF_Close, pane.frame) end
+	-- Every sign of the tab's frame says no, whatever the window is.
+	local function FrameSaysNo() pane.frameDocked, pane.frameShown, pane.tabShown = false, false, false end
+	local function FrameAsWindow() pane.frameDocked, pane.frameShown, pane.tabShown = nil, nil, nil end
+	-- A new session; says where its chat starts.
+	local function Relogin()
+		if A.online then A.logout() end
+		A.login()
+		local start = #A.chat
+		advance(30)
+		return start
+	end
+	local from, lines, doubts, backs, gones
+
+	-- A session of its own, the feed off and its tab closed by the player.
+	A.ns.Killfeed.Disable()
+	for _, candidate in pairs(A.windows) do
+		if candidate.frame and (candidate.shown or candidate.docked) then A.asPlayer(A.env.FCF_Close, candidate.frame) end
+	end
+	Relogin()
+	NewTab()
+	FeedLine()
+
+	-- The client between two setups of its chat windows: for a moment the
+	-- tab is closed and has no name, then it is back as it was. The lines
+	-- that come meanwhile wait together.
+	from, lines, doubts, backs = #A.chat, Lines(), Counter("tabDoubt"), Counter("tabBack")
+	Vanish()
+	FeedLine()
+	FeedLine()
+	check("a tab that vanishes for a moment turns nothing off: its lines wait, on one doubt", FeedOn() and SaidClosed(from) == 0
+		and InMain(from) == 0 and Lines() == lines and Counter("tabDoubt") == doubts + 1)
+	Restore()
+	advance(10)
+	check("back at the next look, it gets the lines that waited, and the main chat heard nothing", FeedOn() and Lines() == lines + 2
+		and Has(pane.lines[Lines()] or "", "Zaljin Darkspear") and SaidClosed(from) == 0 and InMain(from) == 0
+		and not ChatSince(A, from, howTo) and Counter("tabBack") == backs + 1)
+	check("both looks are kept in the saved data, with what the client said of the window and of itself",
+		Has(LastLooks(2), "doubt, unclear; window") and Has(LastLooks(2), "name empty, shown n, docked -, frame docked -, frame shown n, tab n")
+		and Has(LastLooks(1), "back; window") and Has(LastLooks(1), "name feed, shown y")
+		and Has(LastLooks(1), "chat setups ") and Has(LastLooks(1), "no restriction"), LastLooks(2))
+
+	-- Seen closed once under its name, in use again at the next look. The
+	-- look says what restricted the client at that instant.
+	from, lines = #A.chat, Lines()
+	local wasIn = A.state.bucket
+	A.state.combat, A.state.chatLocked, A.state.bucket = true, true, "instance"
+	pane.shown, pane.docked = false, nil
+	FireLine()
+	A.state.combat, A.state.chatLocked, A.state.bucket = false, nil, wasIn
+	advance(1)
+	Restore()
+	advance(10)
+	check("a tab seen closed once and in use at the next look keeps the feed on, with its line", FeedOn() and SaidClosed(from) == 0
+		and Lines() == lines + 1 and Has(LastLooks(2), "doubt, closed") and Has(LastLooks(1), "back; window"), LastLooks(2))
+	check("the look says the client was in combat, under chat lockdown and in an instance",
+		Has(LastLooks(2), "in combat, chat lockdown, instance party") and Has(LastLooks(1), "no restriction"), LastLooks(2))
+
+	-- The client refuses to describe its chat windows: the tab the lines go
+	-- to is still docked by its frame's own flag, so they keep going there.
+	from, lines, doubts = #A.chat, Lines(), Counter("tabDoubt")
+	A.chatInfoBroken = true
+	FeedLine()
+	check("while the client refuses to describe its chat windows, the lines keep going to the tab in use", Lines() == lines + 1
+		and FeedOn() and Counter("tabDoubt") == doubts and InMain(from) == 0)
+	-- With no sign from its frame either, nothing is known: the line waits,
+	-- and the look says the read failed.
+	FrameSaysNo()
+	FeedLine()
+	check("with no sign from its frame either, the line waits and the look says the read failed", Lines() == lines + 1
+		and FeedOn() and Has(LastLooks(1), "doubt, unclear") and Has(LastLooks(1), "name none, shown -, docked -")
+		and Has(LastLooks(1), "read failed: "), LastLooks(1))
+	A.chatInfoBroken = nil
+	FrameAsWindow()
+	advance(10)
+	check("described again, the tab gets that line", Lines() == lines + 2 and InMain(from) == 0)
+
+	-- The saved setup calls the tab neither shown nor docked while its frame
+	-- says otherwise: the frame's own signs count, each of them alone too.
+	from, lines, doubts = #A.chat, Lines(), Counter("tabDoubt")
+	A.chatInfoStale = true
+	FeedLine()
+	check("a tab the saved setup calls closed while its frame is docked keeps its lines", Lines() == lines + 1 and FeedOn()
+		and Counter("tabDoubt") == doubts and InMain(from) == 0)
+	for _, sign in ipairs({ "frameDocked", "frameShown", "tabShown" }) do
+		FrameSaysNo()
+		pane[sign] = true
+		lines = Lines()
+		FeedLine()
+		check("in use by one sign of its frame alone, it keeps them too: " .. sign, Lines() == lines + 1
+			and Counter("tabDoubt") == doubts)
+	end
+	A.chatInfoStale = nil
+	-- And the saved setup's own signs, each alone, when the frame says no.
+	FrameSaysNo()
+	pane.shown, pane.docked = true, nil
+	lines = Lines()
+	FeedLine()
+	check("in use by the saved setup's shown flag alone, it keeps them too", Lines() == lines + 1 and Counter("tabDoubt") == doubts)
+	pane.shown, pane.docked = false, docked
+	lines = Lines()
+	FeedLine()
+	check("in use by the saved setup's docked flag alone, it keeps them too", Lines() == lines + 1 and Counter("tabDoubt") == doubts)
+	FrameAsWindow()
+	Restore()
+
+	-- A sign the client keeps to itself, or will not give, on a tab closed
+	-- by every other sign: it says neither yes nor no, so the tab is not
+	-- called closed, however many looks. Readable and in use again, the tab
+	-- gets the line that waited.
+	local function Withhold(sign, on)
+		if sign == "shown" or sign == "docked" then
+			A.chatInfoSecret = on and sign or nil
+		elseif sign == "frameShown fails" then
+			pane.frameShown = on and "fails" or nil
+		else
+			pane[sign] = on and Mock.SECRET or nil
+		end
+	end
+	for _, sign in ipairs({ "shown", "docked", "frameDocked", "frameShown", "tabShown", "frameShown fails" }) do
+		from, lines = #A.chat, Lines()
+		pane.shown, pane.docked = false, nil
+		Withhold(sign, true)
+		FeedLine()
+		advance(21)
+		check("a tab closed by every sign but one the client withholds is never called closed: " .. sign, FeedOn()
+			and SaidClosed(from) == 0 and Lines() == lines and Has(LastLooks(1), "doubt, unclear"), LastLooks(1))
+		Withhold(sign, false)
+		Restore()
+		advance(10)
+		check("readable and in use again, it gets the line that waited: " .. sign, Lines() == lines + 1 and InMain(from) == 0)
+	end
+
+	-- The client sets its floating chat windows up again just before the
+	-- second look: that look waits for them to settle, the tab back or not.
+	from, lines = #A.chat, Lines()
+	Vanish()
+	FeedLine()
+	advance(7)
+	A.fire("UPDATE_FLOATING_CHAT_WINDOWS")
+	Restore()
+	advance(3)
+	check("a look right after the client set its floating chat windows up waits", FeedOn() and Lines() == lines)
+	advance(10)
+	check("the look after it finds the tab back and gives it the line", Lines() == lines + 1 and InMain(from) == 0)
+
+	-- The same with the chat windows' own setup, on a tab the player closed:
+	-- the look after it settles.
+	from, lines = #A.chat, Lines()
+	ClosePane()
+	FeedLine()
+	advance(7)
+	A.fire("UPDATE_CHAT_WINDOWS")
+	advance(3)
+	check("a look right after the client set its chat windows up settles nothing", FeedOn() and SaidClosed(from) == 0)
+	advance(10)
+	check("the tab is still closed at the next look: the feed turns off, the line that waited dropped", not FeedOn()
+		and SaidClosed(from) == 1 and InMain(from) == 0 and Lines() == lines
+		and Has(LastLooks(2), "doubt, closed") and Has(LastLooks(1), "closed; window"), LastLooks(2))
+
+	-- Chat setups every five seconds, without end: the look gives up waiting.
+	NewTab()
+	from = #A.chat
+	ClosePane()
+	FeedLine()
+	for _ = 1, 16 do
+		advance(5)
+		A.fire("UPDATE_CHAT_WINDOWS")
+	end
+	check("chat setups that never stop do not make the look wait for ever", not FeedOn() and SaidClosed(from) == 1)
+
+	-- Renamed: in use under another name. Seen so twice, the tab is the
+	-- feed's no more: the feed stays on, its lines go to the main chat with
+	-- how to make a tab. The name itself stays out of the saved data.
+	NewTab()
+	FeedLine()
+	from, lines, gones = #A.chat, Lines(), Counter("tabGone")
+	pane.name = "Raid"
+	FeedLine()
+	check("a renamed tab: the line waits for a second look", FeedOn() and InMain(from) == 0 and Lines() == lines)
+	advance(10)
+	check("renamed at the second look too: the feed stays on, its lines go to the main chat with how to make a tab",
+		FeedOn() and InMain(from) == 1 and CountSince(A, from, howTo) == 1 and SaidClosed(from) == 0 and Lines() == lines
+		and Counter("tabGone") == gones + 1)
+	check("the saved look says the name is another one, not which", Has(LastLooks(1), "gone, renamed")
+		and Has(LastLooks(1), "name other, 4 bytes") and not Has(table.concat(Looks(), " | "), "Raid"), LastLooks(1))
+
+	-- /kbs debug shows the state of the feed and the looks kept.
+	from = #A.chat
+	A.slash("debug")
+	check("/kbs debug shows the feed's state and the looks kept", ChatSince(A, from, "kill feed: on true")
+		and ChatSince(A, from, "doubt, closed") and ChatSince(A, from, "gone, renamed"))
+	check("eight looks are kept, the oldest dropped", #Looks() == 8, #Looks())
+
+	-- No tab is expected after that: a login looks at nothing again.
+	doubts = Counter("tabDoubt")
+	Relogin()
+	check("a login after the tab was given up expects none: nothing is looked at again", FeedOn() and Counter("tabDoubt") == doubts)
+
+	-- Named after the feed again, the tab gets the lines back, with no
+	-- option ticked. Closed with no line since, then a logout: the next
+	-- login finds it closed twice and turns the feed off, said once.
+	Restore()
+	from, lines = #A.chat, Lines()
+	FeedLine()
+	check("named after the feed again, the tab gets the lines back", Lines() == lines + 1 and InMain(from) == 0)
+	ClosePane()
+	from = Relogin()
+	check("closed with no line since, a tab that only ever got lines turns the feed off at the next login, said once",
+		not FeedOn() and SaidClosed(from) == 1, SaidClosed(from))
+	from = Relogin()
+	check("off already, the login after that says nothing more", not FeedOn() and SaidClosed(from) == 0)
+
+	-- Nothing clear at the first look, closed at the second: one closed look
+	-- is still not enough, the third settles it.
+	NewTab()
+	from, lines = #A.chat, Lines()
+	Vanish()
+	FeedLine()
+	pane.name = L.KILLFEED_TAB
+	advance(10)
+	check("closed at one look, after a look that told nothing, turns nothing off", FeedOn() and SaidClosed(from) == 0)
+	advance(10)
+	check("closed at the next look too: the feed turns off", not FeedOn() and SaidClosed(from) == 1 and InMain(from) == 0
+		and Lines() == lines)
+
+	-- The line dropped then does not come back with the next tick. And the
+	-- same two looks for a tab found renamed after a look that told nothing.
+	NewTab()
+	check("a line dropped when the feed turned off does not come back when it is ticked again", Lines() == 1
+		and InMain(from) == 0)
+	from, lines = #A.chat, Lines()
+	Vanish()
+	FeedLine()
+	pane.name, pane.shown, pane.docked = "Raid", true, docked
+	advance(10)
+	check("renamed at one look, after a look that told nothing: the line still waits", FeedOn() and InMain(from) == 0
+		and Lines() == lines)
+	advance(10)
+	check("renamed at the next look too: the line goes to the main chat", FeedOn() and InMain(from) == 1 and Lines() == lines)
+
+	-- Ticked with its tab there, then closed before any line: a tab is
+	-- expected all the same, and the next login turns the feed off.
+	Restore()
+	A.ns.Killfeed.Enable()
+	ClosePane()
+	from = Relogin()
+	check("ticked with its tab there, then closed before any line: the next login turns the feed off too",
+		not FeedOn() and SaidClosed(from) == 1, SaidClosed(from))
+
+	-- Ticked with no tab: the player is told the lines go to the main chat,
+	-- and no tab is expected any more.
+	A.ns.Killfeed.Enable()
+	doubts = Counter("tabDoubt")
+	from = Relogin()
+	check("ticked with no tab, the feed expects none: the next login leaves it on and looks at nothing again",
+		FeedOn() and SaidClosed(from) == 0 and Counter("tabDoubt") == doubts)
+
+	-- A tab in use whose name the client will not give is not taken for the
+	-- feed's: only the one the lines already go to gets that trust.
+	A.asPlayer(A.env.FCF_OpenNewWindow, "Guild", true)
+	local guildTab
+	for _, candidate in pairs(A.windows) do
+		if candidate.name == "Guild" then guildTab = candidate end
+	end
+	from = #A.chat
+	A.chatInfoBroken = true
+	FeedLine()
+	A.chatInfoBroken = nil
+	check("a tab in use whose name the client will not give is not taken for the feed's", guildTab ~= nil
+		and #guildTab.lines == 0 and InMain(from) == 1)
+	A.asPlayer(A.env.FCF_Close, guildTab.frame)
+
+	-- A line waiting on a tab in doubt goes to the main chat when the player
+	-- chooses the main chat, and the look that was due settles nothing.
+	NewTab()
+	from, lines = #A.chat, Lines()
+	Vanish()
+	FeedLine()
+	local waited = InMain(from) == 0
+	TickTab(A, false)
+	check("a line waiting on a tab in doubt goes to the main chat when the player chooses the main chat", waited
+		and InMain(from) == 1 and FeedOn())
+	advance(12)
+	check("and the look that was due settles nothing", FeedOn() and SaidClosed(from) == 0 and InMain(from) == 1 and Lines() == lines)
+	-- With the main chat chosen, a closed tab matters to nobody: the next
+	-- login leaves the feed on, its lines in the main chat.
+	Restore()
+	ClosePane()
+	doubts = Counter("tabDoubt")
+	from = Relogin()
+	FeedLine()
+	check("with the main chat chosen, a closed tab turns nothing off at the next login", FeedOn() and SaidClosed(from) == 0
+		and InMain(from) == 1 and Counter("tabDoubt") == doubts)
+	Restore()
+	TickTab(A, true)
+
+	-- Ticked again while a line waits on a tab that is back: the line lands
+	-- at once. The look that was due for that doubt is not the next one's:
+	-- a tab closed five seconds later is settled ten seconds after its own
+	-- first look, not five.
+	lines = Lines()
+	Vanish()
+	FeedLine()
+	Restore()
+	A.ns.Killfeed.Enable()
+	check("ticked while a line waits on a tab that is back, the line lands at once", Lines() == lines + 2
+		and Has(pane.lines[Lines()] or "", "Zaljin Darkspear"))
+	advance(4)
+	from = #A.chat
+	ClosePane()
+	FeedLine()
+	advance(5)
+	check("the look of a doubt that was lifted settles nothing for the next one", FeedOn() and SaidClosed(from) == 0)
+	advance(5)
+	check("which its own look settles, ten seconds after its first", not FeedOn() and SaidClosed(from) == 1)
+
+	-- The tab renamed while another one carries the feed's name: the lines
+	-- go to that one at once.
+	NewTab()
+	FeedLine()
+	pane.name = "Old"
+	A.asPlayer(A.env.FCF_OpenNewWindow, L.KILLFEED_TAB, true)
+	local second = FeedWindow(A)
+	from, doubts = #A.chat, Counter("tabDoubt")
+	FeedLine()
+	check("renamed while another tab carries the feed's name: the lines go to that one at once", second ~= nil and second ~= pane
+		and #second.lines == 1 and Counter("tabDoubt") == doubts and InMain(from) == 0)
+
+	-- The feed is left as it was found: off, its tabs closed by the player.
+	A.ns.Killfeed.Disable()
+	ClosePane()
+	A.asPlayer(A.env.FCF_Close, second.frame)
+end
+
 -- Through all of it the addon opened, closed and selected no chat window,
 -- and no file of it calls the game's code that does: run from an addon,
 -- that code taints the chat edit box for the rest of the session (in game,
 -- /invite was refused and group chat failed on a secret value).
-check("the addon never opens, closes or selects a chat window", (A.addonChatWrites or 0) == 0,
+check("the addon never opens, closes or selects a chat window by itself", (A.addonChatWrites or 0) == 0,
 	table.concat(A.addonChatWriteNames or {}, ", "))
 check("no addon file calls the game's chat window functions that write", (function()
 	local offenders = {}
@@ -1864,7 +2260,11 @@ check("no addon file calls the game's chat window functions that write", (functi
 			code = code:gsub("%-%-%[%[.-%]%]", ""):gsub("%-%-[^\n]*", "")
 			for _, name in ipairs({ "FCF_OpenNewWindow", "FCF_Close", "FCFDock_SelectWindow", "FCF_SelectDockFrame",
 				"FCF_DockFrame", "SetLastActiveWindow" }) do
-				if code:find(name, 1, true) then offenders[#offenders + 1] = file .. ": " .. name end
+				-- One exception: the kill feed opens its tab when the player asks
+				-- for it, in the function that reloads the interface right after.
+				local _, uses = code:gsub(name, "")
+				local allowed = (name == "FCF_OpenNewWindow" and file:gsub("\\", "/") == "UI/Killfeed.lua") and 2 or 0
+				if uses > allowed then offenders[#offenders + 1] = file .. ": " .. name end
 			end
 		end
 	end
@@ -2215,6 +2615,206 @@ end
 OutdatedAddons()
 
 --------------------------------------------------------------------------------
+section("Our own addon behind, and the Discord link")
+--------------------------------------------------------------------------------
+
+-- The member whose addon is behind is told by a small dialog on the board,
+-- the first time it opens in the session, with three answers: later (it
+-- comes back next session), not for this release, never (the Options tab's
+-- box turns the reminders back on). The two last also quiet the chat line.
+-- The Options tab's version line names the newer release whatever was
+-- answered, the minimap button only while the reminders hold. The footer
+-- keeps counting the others. The Discord link sits in a box of the Options
+-- tab that keeps its text and selects it, and /kbs discord opens it
+-- selected. Here E runs 0.1.16, A, C and D the newest, 0.1.19.
+local function OwnUpdateAndDiscord()
+	local warnR, warnG, warnB = A.ns.Theme.Color("warn")
+	local function IsWarn(color)
+		return color ~= nil and color[1] == warnR and color[2] == warnG and color[3] == warnB
+	end
+	-- The line the minimap button's tooltip gives for a newer release, if any.
+	local function MinimapLine(client, version)
+		local object = client.env.LibStub("LibDataBroker-1.1"):GetDataObjectByName("KilledBySavages")
+		local color
+		object.OnTooltipShow({ AddLine = function(_, line, r, g, b)
+			if line == client.ns.L.UPDATE_NOTICE:format(version) then color = { r, g, b } end
+		end })
+		return color
+	end
+	local function Press(button)
+		button:GetScript("OnClick")(button)
+	end
+	local function NewSession()
+		E.logout()
+		E.login()
+		advance(30)
+	end
+	local function NoDialog(shell)
+		return shell.updateDialog == nil or not shell.updateDialog.shown
+	end
+
+	local L = E.ns.L
+	check("the member behind knows of the newer release", E.ns.Sync.NewerVersion() == "0.1.19" and E.ns.Sync.Reminder() == "0.1.19",
+		E.ns.Sync.NewerVersion())
+	check("the chat line that told it names the command for the Discord link",
+		ChatSince(E, 0, L.UPDATE_AVAILABLE:format("0.1.19")) and L.UPDATE_AVAILABLE:find("/kbs discord", 1, true) ~= nil)
+	E.slash("")
+	local board = E.env.KilledBySavagesFrame
+	local dialog = board.updateDialog
+	check("its board opens with a dialog: the version that is out, the one that runs", dialog ~= nil and dialog.shown
+		and dialog.text.text == L.UPDATE_DIALOG_TEXT:format("0.1.19", "0.1.16") and dialog.version == "0.1.19",
+		dialog and dialog.text.text)
+	local behind = #E.ns.Sync.Outdated().players
+	check("the footer keeps counting the others", behind >= 1 and board.outdated.shown and board.outdated.count.text == tostring(behind)
+		and board.outdated.rest.text == (behind == 1 and L.OUTDATED_ONE or L.OUTDATED_MANY), board.outdated.rest.text)
+	E.slash("options")
+	local options = board.tabFrames.options
+	check("the Options tab's version line names the newer one, in orange, and its box for the reminders is ticked",
+		options.version.text == L.OPTIONS_VERSION_OUTDATED:format("0.1.16", "0.1.19") and IsWarn(options.version.color)
+		and options.boxes[4].checked == true, options.version.text)
+	check("so does the minimap button's tooltip", IsWarn(MinimapLine(E, "0.1.19")))
+
+	-- Later: gone for the session, back at the next one with the chat line.
+	Press(dialog.later)
+	local closed = not dialog.shown
+	E.slash("")
+	E.slash("")
+	check("\"Later\" closes it for the session and sets nothing aside", closed and not dialog.shown
+		and E.db().settings.updateSkip == nil and E.db().settings.updates == true)
+	E.slash("")
+	local chatE = #E.chat
+	NewSession()
+	L = E.ns.L
+	E.slash("")
+	board = E.env.KilledBySavagesFrame
+	dialog = board.updateDialog
+	check("it comes back at the next session, with the chat line", dialog ~= nil and dialog.shown
+		and CountSince(E, chatE, L.UPDATE_AVAILABLE:format("0.1.19")) == 1)
+
+	-- Skip this version: no more of it, here, in the chat or on the minimap
+	-- button; the Options tab and /kbs status still name it.
+	Press(dialog.skip)
+	check("\"Skip this version\" closes it and sets that release aside", not dialog.shown and E.db().settings.updateSkip == "0.1.19"
+		and E.db().settings.updates == true and E.ns.Sync.Reminder() == nil and MinimapLine(E, "0.1.19") == nil)
+	E.slash("")
+	chatE = #E.chat
+	NewSession()
+	L = E.ns.L
+	E.slash("options")
+	board = E.env.KilledBySavagesFrame
+	options = board.tabFrames.options
+	check("a release set aside is no longer said: no chat line, no dialog, nothing on the minimap button",
+		E.ns.Sync.NewerVersion() == "0.1.19" and CountSince(E, chatE, L.UPDATE_AVAILABLE:format("0.1.19")) == 0
+		and NoDialog(board) and MinimapLine(E, "0.1.19") == nil)
+	chatE = #E.chat
+	E.slash("status")
+	check("the Options tab's version line and /kbs status still name it",
+		options.version.text == L.OPTIONS_VERSION_OUTDATED:format("0.1.16", "0.1.19") and IsWarn(options.version.color)
+		and CountSince(E, chatE, L.UPDATE_AVAILABLE:format("0.1.19")) == 1, options.version.text)
+
+	-- The release after the one set aside is announced, at once on an open
+	-- board. The roster asked for at the opening comes in and refreshes the
+	-- board: that is let through first, so that what follows is the newer
+	-- release's doing alone.
+	advance(15)
+	chatE = #E.chat
+	C.ns.Sync.SendRaw("V^0.1.20", "WHISPER", E.name)
+	advance(1)
+	dialog = board.updateDialog
+	check("the release after the one set aside is announced, at once on an open board",
+		CountSince(E, chatE, L.UPDATE_AVAILABLE:format("0.1.20")) == 1 and dialog ~= nil and dialog.shown
+		and dialog.text.text == L.UPDATE_DIALOG_TEXT:format("0.1.20", "0.1.16") and IsWarn(MinimapLine(E, "0.1.20"))
+		and options.version.text == L.OPTIONS_VERSION_OUTDATED:format("0.1.16", "0.1.20"), dialog and dialog.text.text)
+
+	-- Never: the reminders are off, said in the chat with the way back.
+	chatE = #E.chat
+	Press(dialog.never)
+	local gone = not dialog.shown
+	advance(1)
+	check("\"Never remind me\" closes it, turns the reminders off and says where they come back",
+		gone and not dialog.shown and E.db().settings.updates == false and E.ns.Sync.Reminder() == nil
+		and ChatSince(E, chatE, L.UPDATE_NEVER_DONE) and options.boxes[4].checked == false)
+	E.slash("")
+	chatE = #E.chat
+	NewSession()
+	L = E.ns.L
+	E.slash("options")
+	board = E.env.KilledBySavagesFrame
+	options = board.tabFrames.options
+	check("with the reminders off nothing is said: no chat line, no dialog, the box unticked",
+		E.ns.Sync.NewerVersion() == "0.1.19" and CountSince(E, chatE, L.UPDATE_AVAILABLE:match("^(.-)%(")) == 0
+		and NoDialog(board) and options.boxes[4].checked == false and MinimapLine(E, "0.1.19") == nil)
+
+	-- The Options tab's box brings them back, the release set aside
+	-- included; unticked while the dialog is up, it takes the dialog away.
+	local reminders = options.boxes[4]
+	reminders:SetChecked(true)
+	Press(reminders)
+	check("ticking the box again brings the reminders back, the release set aside included",
+		E.db().settings.updates == true and E.db().settings.updateSkip == nil and E.ns.Sync.Reminder() == "0.1.19" and NoDialog(board))
+	E.slash("")
+	E.slash("options")
+	dialog = board.updateDialog
+	check("and the dialog is there at the next opening", dialog ~= nil and dialog.shown)
+	reminders:SetChecked(false)
+	Press(reminders)
+	advance(1)
+	check("unticking the box while the dialog is up takes it away", not dialog.shown and E.db().settings.updates == false)
+	-- E as it was: reminders on, nothing set aside, a session of its own.
+	E.ns.Sync.SetReminders(true)
+	E.slash("")
+	NewSession()
+
+	-- D runs the newest release: nothing says to update.
+	D.slash("options")
+	local boardD = D.env.KilledBySavagesFrame
+	local optionsD = boardD.tabFrames.options
+	check("on the newest release nothing says to update: no dialog, a plain version line, the count of the others",
+		D.ns.Sync.NewerVersion() == nil and boardD.updateDialog == nil
+		and optionsD.version.text == D.ns.L.OPTIONS_VERSION:format("0.1.19") and not IsWarn(optionsD.version.color)
+		and MinimapLine(D, "0.1.19") == nil and boardD.outdated.shown and boardD.outdated.count.text ~= "", optionsD.version.text)
+	D.slash("")
+
+	-- The Discord link: a box of the Options tab that keeps its text.
+	local url = A.ns.DISCORD_URL
+	A.slash("options")
+	local boardA = A.env.KilledBySavagesFrame
+	local box = boardA.tabFrames.options.discord
+	check("the Options tab holds the Discord link in a box", type(url) == "string" and url:find("^https://discord%.gg/%w+$") ~= nil
+		and box ~= nil and box.text == url, url)
+	box.text = url .. "x"
+	box:GetScript("OnTextChanged")(box, true)
+	check("the box keeps the link whatever is typed in it, and selects it", box.text == url and box.highlight == true, box.text)
+	-- A click in the box selects the link again when it has the keyboard,
+	-- and does nothing when it has not (the click that gives it comes first).
+	box.highlight = false
+	box:GetScript("OnMouseUp")(box)
+	local idle = box.highlight
+	box:SetFocus()
+	box.highlight = false
+	box:GetScript("OnMouseUp")(box)
+	check("a click in the box selects the link again", idle == false and box.highlight == true)
+	box:ClearFocus()
+	A.slash("")
+	local chatA = #A.chat
+	A.slash("discord")
+	check("/kbs discord says the link in the chat and opens the Options tab with it selected",
+		ChatSince(A, chatA, A.ns.L.DISCORD_CHAT:format(url)) and boardA.shown == true and A.ns.UI.State().tab == "options"
+		and box:HasFocus() and box.highlight == true)
+	box:GetScript("OnEscapePressed")(box)
+	check("Escape gives the keyboard back", not box:HasFocus() and box.highlight == false)
+	chatA = #A.chat
+	A.slash("help")
+	check("the help lists the command", ChatSince(A, chatA, A.ns.L.HELP_DISCORD))
+	chatA = #A.chat
+	A.slash("status")
+	check("on the newest release /kbs status says nothing of an update",
+		not ChatSince(A, chatA, A.ns.L.UPDATE_AVAILABLE:match("^(.-)%(")))
+	A.slash("")
+end
+OwnUpdateAndDiscord()
+
+--------------------------------------------------------------------------------
 section("Search, filters and roles")
 --------------------------------------------------------------------------------
 
@@ -2291,7 +2891,13 @@ local function SearchAndFilters()
 	local sample = { name = "Aldric Stormhand", class = "HUNTER", race = "Human", realm = "Ashbringer", playerKey = "a1bf6c73",
 		alias = "Aldric", level = 60, baselineHK = 500, lifeHK = 512, version = "1.0.1", role = "H" }
 	local line = ns.Records.EncodeProfile(sample)
-	check("a profile carries the role as its last field", line == "P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.1;H", line)
+	check("a profile carries the role, then the player's main, a dash when it names none",
+		line == "P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.1;H;-", line)
+	check("the main reads back as a tail, as none, or as unknown from a version that says nothing of it",
+		ns.Records.DecodeProfile(line).main == false
+		and ns.Records.DecodeProfile("P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.3;H;1234-0000AB12").main == "1234-0000AB12"
+		and ns.Records.DecodeProfile("P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.1;H").main == nil
+		and ns.Records.DecodeProfile("P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.3;H;not a tail").main == nil)
 	check("and reads it back, a profile without one or with something else giving none", ns.Records.DecodeProfile(line).role == "H"
 		and ns.Records.DecodeProfile("P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.0").role == nil
 		and ns.Records.DecodeProfile("P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.1;Boss").role == nil)
@@ -2315,18 +2921,26 @@ local function SearchAndFilters()
 	alt.ns.UI.Show()
 	alt.ns.UI.SelectTab("me")
 	local meTab = alt.ns.UI.Frame().tabFrames.me
+	-- The three roles close the row of each character, in the order T, H, D.
+	local function RoleButton(role)
+		local at = { T = 8, H = 9, D = 10 }
+		for _, item in ipairs(Rows(meTab.view)) do
+			if item.row.data and item.row.data.guid == alt.guid then return item.row.cells[at[role]].button end
+		end
+		return nil
+	end
 	local profilesBefore = SentSince(0, "GUILD", "P")
-	Click(meTab.roleButtons.H)
+	Click(RoleButton("H"))
 	advance(5)
 	check("a role chosen in the Me tab is kept for the character, lit, and goes out with its profile at once",
-		alt.ns.Identity.Role() == "H" and alt.db().characters[alt.guid].role == "H" and meTab.roleButtons.H.selected == true
-		and meTab.roleButtons.T.selected ~= true and ns.Stats.AuthorInfo(alt.guid).role == "H"
+		alt.ns.Identity.Role() == "H" and alt.db().characters[alt.guid].role == "H" and RoleButton("H").selected == true
+		and RoleButton("T").selected ~= true and ns.Stats.AuthorInfo(alt.guid).role == "H"
 		and SentSince(0, "GUILD", "P") > profilesBefore, tostring(ns.Stats.AuthorInfo(alt.guid).role))
-	Click(meTab.roleButtons.H)
+	Click(RoleButton("H"))
 	advance(5)
 	check("the chosen role clicked again removes it, for the guild too",
-		alt.ns.Identity.Role() == nil and meTab.roleButtons.H.selected ~= true and ns.Stats.AuthorInfo(alt.guid).role == nil)
-	Click(meTab.roleButtons.T)
+		alt.ns.Identity.Role() == nil and RoleButton("H").selected ~= true and ns.Stats.AuthorInfo(alt.guid).role == nil)
+	Click(RoleButton("T"))
 	advance(5)
 	alt.ns.UI.Hide()
 
@@ -2568,6 +3182,10 @@ local function ReviewFixes()
 		waiting and ns.Identity.roster.at > at and not ns.Identity.roster.pending, ns.Identity.roster.at - at)
 
 	-- A page whose chunks the queue refuses is not counted as going out.
+	-- The count is of every page A is sending: one it is serving a member
+	-- at this moment would be in it, so whatever it serves goes out first.
+	local idle, served = Mock.advanceUntil(function() return ns.Sync.State().outPages == 0 end, 300)
+	check("before its queue is filled, A has no page going out", idle, ("%d still out after %d s"):format(ns.Sync.State().outPages, served))
 	local sync = ns.Sync.State()
 	local queued = #sync.queue
 	for _ = 1, 400 do
@@ -2699,6 +3317,818 @@ end
 NewWeek()
 
 --------------------------------------------------------------------------------
+section("Guild ranks to give, mains, a role for every character")
+--------------------------------------------------------------------------------
+
+-- The kill feed's tab made on request: the one time the addon opens a chat
+-- window, and the interface reloads in the same breath, since a chat window
+-- opened by an addon leaves the chat marked as the addon's for the session.
+local function FeedTabOnRequest()
+	local L = A.ns.L
+	if not A.online then
+		A.login()
+		advance(30)
+	end
+	A.ns.Killfeed.Enable()
+	TickTab(A, false)
+	A.slash("options")
+	local options = A.ns.UI.Frame().tabFrames.options
+	local restsInMainChat = options.createTab.shown == false
+	options.boxes[3]:SetChecked(true)
+	Click(options.boxes[3])
+	check("the offer comes with the second box: none while the lines go to the main chat, one as soon as the tab is wanted",
+		restsInMainChat and options.createTab.shown == true)
+	check("the feed on with no tab of its name: the Options tab offers to make it", A.ns.Killfeed.NeedsTab() == true
+		and options.createTab.shown == true and options.createTab.label.text == L.OPTIONS_KILLFEED_CREATE:format(L.KILLFEED_TAB))
+	local writes, spoken = A.addonChatWrites or 0, #A.chat
+	Click(options.createTab)
+	local made = FeedWindow(A)
+	check("its button opens the tab, empty of chat channels, and reloads the interface at once: the chat is not left marked",
+		made ~= nil and #made.frame.messageTypeList == 0 and (A.addonChatWrites or 0) == writes + 1 and A.reloadAsked == 1
+		and A.chatMarked == false and ChatSince(A, spoken, L.KILLFEED_CREATED:format(L.KILLFEED_TAB))
+		and A.db().settings.killfeed == true and A.db().settings.killfeedTab == true, tostring(A.reloadAsked))
+	-- The reload the client was asked for.
+	A.logout()
+	A.login()
+	advance(130)
+	made = FeedWindow(A)
+	local lines = made and #made.lines or 0
+	KillZaljin(A)
+	A.slash("options")
+	options = A.ns.UI.Frame().tabFrames.options
+	check("after the reload the lines go to the tab, and the button is gone", made ~= nil and #made.lines == lines + 1
+		and A.ns.Killfeed.NeedsTab() == false and options.createTab.shown == false)
+	check("asked again with the tab there, nothing is opened and nothing reloads", A.ns.Killfeed.CreateTab() == true
+		and (A.addonChatWrites or 0) == writes + 1 and A.reloadAsked == 1)
+	-- No chat window to spare: said, nothing opened, nothing reloaded.
+	A.asPlayer(A.env.FCF_Close, made.frame)
+	local others = {}
+	for _ = 1, 10 do
+		local frame = A.asPlayer(A.env.FCF_OpenNewWindow, "Other", true)
+		if not frame then break end
+		others[#others + 1] = frame
+	end
+	A.ns.Killfeed.Enable()
+	spoken = #A.chat
+	check("with no chat window to spare it says so, opens nothing and reloads nothing", #others >= 1 and A.ns.Killfeed.CreateTab() == false
+		and ChatSince(A, spoken, L.KILLFEED_NO_WINDOW:format(L.KILLFEED_TAB)) and A.reloadAsked == 1 and A.chatMarked ~= true
+		and (A.addonChatWrites or 0) == writes + 1 and FeedWindow(A) == nil)
+	-- A client with no way to reload: the tab is the player's to make.
+	local reload = A.env.C_UI
+	A.env.C_UI = nil
+	for _, frame in ipairs(others) do A.asPlayer(A.env.FCF_Close, frame) end
+	spoken = #A.chat
+	check("with no way to reload the interface nothing is opened: the tab stays the player's to make", A.ns.Killfeed.CreateTab() == false
+		and ChatSince(A, spoken, L.KILLFEED_CANNOT_CREATE:format(L.KILLFEED_TAB)) and (A.addonChatWrites or 0) == writes + 1
+		and FeedWindow(A) == nil)
+	A.env.C_UI = reload
+	-- As the next section expects the feed: off.
+	A.ns.Killfeed.Disable()
+	A.slash("")
+end
+FeedTabOnRequest()
+
+-- The kill feed says the level of the member, and of the enemy when the
+-- member's client knew it: in the colour the game rated it with against
+-- the member, or as the game's skull when the game hid it.
+local function FeedLevels()
+	local L = A.ns.L
+	if not A.online then
+		A.login()
+		advance(130)
+	end
+	local function Said(needle)
+		for index = #A.chat, 1, -1 do
+			if A.chat[index]:find(needle, 1, true) then return A.chat[index] end
+		end
+		return ""
+	end
+	local function Kill(fields)
+		A.state.lifetime = A.state.lifetime + 1
+		local fresh = { type = "K", t = Mock.Server(), bucket = "w", how = "kb", vtail = zaljin, vname = "Zaljin Darkspear",
+			vclass = "SHAMAN", vrace = "Troll", mapID = 1424, x = 0.4, y = 0.5, lifeHK = A.state.lifetime }
+		for key, value in pairs(fields) do fresh[key] = value end
+		A.ns.Records.AppendOwn(fresh)
+		advance(1)
+		return Said("Zaljin Darkspear")
+	end
+	-- The lines in the main chat, where they are read back.
+	A.ns.Killfeed.SetTab(false)
+	A.ns.Killfeed.Enable()
+	local line = Kill({ vlevel = 31, vcon = "I" })
+	check("a kill line says the member's level, and the enemy's in the colour the game rated it with",
+		line:find("Aldric Stormhand|r (60) ", 1, true) ~= nil and line:find("Zaljin Darkspear|r (|cffff1a1a31|r) ", 1, true) ~= nil, line)
+	-- The member comes first in every line: "killed" for a kill, "was killed
+	-- by" for a death.
+	local diedBy = L.KILLFEED_DEATH:match("^%%s (.-) %%s")
+	check("a kill line does not read as a death", line:find(" " .. diedBy .. " ", 1, true) == nil
+		and line:find(" " .. L.KILLFEED_KILL:match("^%%s (.-) %%s") .. " ", 1, true) ~= nil, line)
+	line = Kill({ vlevel = 24 })
+	check("a level the game did not rate stays plain", line:find("Zaljin Darkspear|r (24) ", 1, true) ~= nil, line)
+	line = Kill({})
+	check("an enemy whose level is not known gets none", line:find("Zaljin Darkspear|r %(%d+%-%d+%)") ~= nil, line)
+	line = Kill({ vcon = "S" })
+	check("a level the game hid is the locale's word for the skull on a client without its art",
+		line:find("Zaljin Darkspear|r (" .. L.KILLFEED_SKULL .. ") ", 1, true) ~= nil, line)
+	A.env.QuestDifficultyColors = { standard = { r = 0, g = 1, b = 0 } }
+	line = Kill({ vlevel = 20, vcon = "E" })
+	check("the colours are the client's own when it has them", line:find("Zaljin Darkspear|r (|cff00ff0020|r) ", 1, true) ~= nil, line)
+	A.env.QuestDifficultyColors = nil
+	A.ns.Records.AppendOwn({ type = "D", t = Mock.Server(), bucket = "w", ktail = gruk, kname = "Gruk Bonecrusher", kclass = "WARRIOR",
+		krace = "Orc", kkind = "p", spell = "Frappe mortelle", mapID = 1424, x = 0.4, y = 0.5, lifeHK = A.state.lifetime, klevel = 45, kcon = "D" })
+	advance(4)
+	line = Said("Gruk Bonecrusher")
+	check("a death line says the member's level, then the killer's in its colour", line:find("Aldric Stormhand|r (60) ", 1, true) ~= nil
+		and line:find("Gruk Bonecrusher|r (|cffff804045|r) ", 1, true) ~= nil, line)
+	-- The other shapes of a death line: no zone known, a killer with no
+	-- score to give (a pet has no kills of its own on the board), neither.
+	local function Death(fields)
+		advance(12)
+		local fresh = { type = "D", t = Mock.Server(), bucket = "w", kkind = "p", spell = "Frappe mortelle", lifeHK = A.state.lifetime }
+		for key, value in pairs(fields) do fresh[key] = value end
+		local lines = #A.chat
+		A.ns.Records.AppendOwn(fresh)
+		advance(1)
+		return #A.chat == lines + 1 and A.chat[#A.chat] or ""
+	end
+	line = Death({ ktail = gruk, kname = "Gruk Bonecrusher", kclass = "WARRIOR", krace = "Orc" })
+	check("a death with no zone known still reads as one, the score last", line:find("Aldric Stormhand|r (60) " .. diedBy .. " ", 1, true) ~= nil
+		and line:find("Gruk Bonecrusher|r %(%d+%-%d+%)%.") ~= nil, line)
+	line = Death({ kkind = "e", kname = "Schwarzesau", mapID = 1424, x = 0.4, y = 0.5 })
+	check("a death by a pet has no score, and still reads as a death", line:find(" " .. diedBy .. " Schwarzesau (" .. L.TOOLTIP_PET .. ") ", 1, true) ~= nil
+		and line:find("%(%d+%-%d+%)") == nil, line)
+	line = Death({ kkind = "e", kname = "Schwarzesau" })
+	check("a death with neither zone nor score too", line:find(" " .. diedBy .. " Schwarzesau (" .. L.TOOLTIP_PET .. ").", 1, true) ~= nil, line)
+	-- A new session on a client that has the skull's art.
+	A.logout()
+	A.state.atlases = { ["UI-HUD-UnitFrame-Target-HighLevelTarget_Icon"] = true }
+	A.login()
+	advance(130)
+	-- What the member's client records: the level it reads, and the game's
+	-- own rating of the enemy against the member.
+	local victim, killer = Mock.players[HORDE[2].guid], Mock.players[HORDE[1].guid]
+	victim.level, victim.con = 33, 3
+	A.state.target = HORDE[2].guid
+	A.fire("PARTY_KILL", A.guid, HORDE[2].guid)
+	A.fire("UNIT_DIED", HORDE[2].guid)
+	GainHK(A)
+	advance(5)
+	local kept = Last(A)
+	check("a kill records the victim's level and how the game rated it", kept.type == "K" and kept.vlevel == 33 and kept.vcon == "D",
+		tostring(kept.vlevel) .. " " .. tostring(kept.vcon))
+	victim.level, victim.con = -1, 4
+	A.fire("PARTY_KILL", A.guid, HORDE[2].guid)
+	A.fire("UNIT_DIED", HORDE[2].guid)
+	GainHK(A)
+	advance(5)
+	kept = Last(A)
+	check("a victim whose level the game hides is recorded as such, with no level", kept.type == "K" and kept.vlevel == nil
+		and kept.vcon == "S", tostring(kept.vlevel) .. " " .. tostring(kept.vcon))
+	victim.level, victim.con = 60, nil
+	killer.level, killer.con = 48, 4
+	A.state.target = HORDE[1].guid
+	A.state.recap = { {
+		sourceName = "Gruk Bonecrusher", sourceGUID = HORDE[1].guid, sourceFlags = 0x548, destName = "Aldric Stormhand", destGUID = A.guid,
+		spellName = "Frappe mortelle", spellId = 12294, amount = 1450, overkill = 120, hideCaster = false, timestamp = 12345.6,
+		event = "SPELL_DAMAGE",
+	} }
+	A.state.recapReadyAt = Mock.Now()
+	A.fire("PLAYER_DEAD")
+	advance(6)
+	kept = Last(A)
+	check("a death records the killer's level and rating while the client still knows it as a unit", kept.type == "D"
+		and kept.klevel == 48 and kept.kcon == "I", tostring(kept.klevel) .. " " .. tostring(kept.kcon))
+	-- A killer far above the member: the game hides its level. Nothing is
+	-- written in its place, and the line shows the skull.
+	advance(12)
+	killer.level, killer.con = -1, 4
+	A.state.recapReadyAt = Mock.Now()
+	A.fire("PLAYER_DEAD")
+	advance(6)
+	kept = Last(A)
+	local own = A.db().authors[A.guid]
+	local stored = own.log[own.head] or ""
+	line = Said("Gruk Bonecrusher")
+	check("a killer whose level the game hides is recorded as such, with no level, and its line shows the skull",
+		kept.type == "D" and kept.klevel == nil and kept.kcon == "S" and stored:sub(-3) == ";;S"
+		and line:find("Gruk Bonecrusher|r (|A:UI-HUD-UnitFrame-Target-HighLevelTarget_Icon:14:14|a) ", 1, true) ~= nil, stored .. " / " .. line)
+	A.state.target, A.state.recap = nil, nil
+	killer.level, killer.con = 60, nil
+
+	line = Kill({ vcon = "S" })
+	check("with the client's art, a hidden level is the skull the target frame shows",
+		line:find("Zaljin Darkspear|r (|A:UI-HUD-UnitFrame-Target-HighLevelTarget_Icon:14:14|a) ", 1, true) ~= nil, line)
+
+	-- On the wire: at the end of the record, where older versions never look.
+	local wire = A.ns.Records.Encode({ type = "D", seq = 3, t = 1794009577, bucket = "w", ktail = "6938-00AA00BB", kname = "Vex", kkind = "p",
+		lifeHK = 4, klevel = 37, kcon = "F" })
+	local read = A.ns.Records.Decode(wire)
+	check("a death carries the killer's level and rating at its end", wire:sub(-5) == ";37;F" and read.klevel == 37 and read.kcon == "F", wire)
+	local odd = "K1;7;1794009143;w;kb;6938-00ABCDEF;Grol Ashtusk;WARRIOR;Orc;16;52;0.4321;0.6789;Savages;12;;Q"
+	check("a level out of range or a rating this version does not know reads as none, and the record stays good",
+		A.ns.Records.Decode("D1;3;1794009577;w;6938-00AA00BB;Vex;;;p;;;;;4;;99;Z").klevel == nil
+		and A.ns.Records.Decode("D1;3;1794009577;w;6938-00AA00BB;Vex;;;p;;;;;4;;99;Z").kcon == nil
+		and A.ns.Records.Decode(odd).vcon == nil and A.ns.Records.Validate(A.ns.Records.Decode(odd), 1794009200) == true)
+	check("a record from before the levels reads as it did",
+		A.ns.Records.Decode("K1;7;1794009143;w;kb;6938-00ABCDEF;Grol Ashtusk;WARRIOR;Orc;16;52;0.4321;0.6789;Savages;12;").vcon == nil
+		and A.ns.Records.Decode("D1;8;1794009577;w;6938-00AA00BB;Vex;;;p;;;;;4;").klevel == nil)
+
+	-- As the next section expects the feed: off, its tab wanted.
+	A.ns.Killfeed.Disable()
+	A.db().settings.killfeedTab = true
+end
+FeedLevels()
+
+-- Example lines on request, /kbs preview: how the feed reads on this client,
+-- from the code of the real lines. Nothing is recorded, nothing is sent, no
+-- setting moves, and the feed's tab is only looked for.
+local function FeedPreview()
+	local L = A.ns.L
+	local tag = "[" .. L.KILLFEED_PREVIEW_TAG .. "]"
+	local diedBy = L.KILLFEED_DEATH:match("^%%s (.-) %%s")
+	local killed = L.KILLFEED_KILL:match("^%%s (.-) %%s")
+	local function Since(list, from)
+		local out = {}
+		for index = from + 1, #list do out[#out + 1] = list[index] end
+		return out
+	end
+	local function Tagged(lines)
+		local n = 0
+		for _, line in ipairs(lines) do
+			if line:find(tag, 1, true) then n = n + 1 end
+		end
+		return n
+	end
+	local function Has(lines, needle, pattern)
+		for _, line in ipairs(lines) do
+			if line:find(needle, 1, not pattern) then return line end
+		end
+		return nil
+	end
+	local head, kept = Held(A, A)
+	local records, sent, from = #Journal(A), #network.sent, #A.chat
+	local doubts, used = A.counter("killfeed.tabDoubt"), A.db().characters[A.guid].feedTabUsed
+	A.slash("preview")
+	local said = Since(A.chat, from)
+	check("the preview says what it is, gives twelve example lines, each marked as one, and says the feed itself is off",
+		#said == 14 and said[1]:find(L.KILLFEED_PREVIEW, 1, true) ~= nil and Tagged(said) == 12
+		and said[14]:find(L.KILLFEED_PREVIEW_OFF, 1, true) ~= nil, #said .. " lines, " .. Tagged(said) .. " marked")
+	check("the examples show each colour of the game's ratings around the member's level, the skull, a plain level and none",
+		Has(said, "Gruk Bonecrusher|r (|cff80808048|r) (1-0) ") ~= nil and Has(said, "Zaljin Darkspear|r (|cff40bf4055|r) ") ~= nil
+		and Has(said, "Morga Ashfang|r (|cffffd10060|r) ") ~= nil and Has(said, "Durz Blackmaw|r (|cffff804060|r) ") ~= nil
+		and Has(said, "Kessa Nightreed|r (|cffff1a1a60|r) ") ~= nil
+		and Has(said, "Ulma Dreadhollow|r (|A:UI-HUD-UnitFrame-Target-HighLevelTarget_Icon:14:14|a) ") ~= nil
+		and Has(said, "Hoggar Flintjaw|r (60) (3-0) ") ~= nil and Has(said, "Durz Blackmaw|r (|cffff804060|r) (1-2) ") ~= nil and Has(said, "Vex Marrowind|r %(%d+%-%d+%)", true) ~= nil,
+		table.concat(said, " / "))
+	local memberFirst, kills, deaths = true, 0, 0
+	for index = 2, 13 do
+		local line = said[index] or ""
+		if not line:find("%]|r |cff%x%x%x%x%x%xAldric Stormhand|r %(60%) ") then memberFirst = false end
+		if line:find(" " .. diedBy .. " ", 1, true) then
+			deaths = deaths + 1
+		elseif line:find(" " .. killed .. " ", 1, true) then
+			kills = kills + 1
+		end
+	end
+	check("the character played comes first in each, with its level: eight kills, three deaths, then a match", memberFirst
+		and kills == 8 and deaths == 3 and (said[13] or ""):find(L.KILLFEED_N_KILLS:format(12), 1, true) ~= nil,
+		kills .. " kills, " .. deaths .. " deaths")
+	local zone = A.ns.Theme.ZoneName(A.ns.Util.Position().mapID)
+	local pet = Has(said, "Snarl (" .. L.TOOLTIP_PET .. ")")
+	check("the examples take place where the character stands, and the death by a pet has no score", zone ~= nil
+		and (said[2] or ""):find(zone, 1, true) ~= nil and pet ~= nil and pet:find("%(%d+%-%d+%)") == nil, tostring(zone))
+	advance(3)
+	local headNow, keptNow = Held(A, A)
+	check("nothing is recorded, nothing is sent to the guild, no setting moves and the tab is not doubted",
+		headNow == head and keptNow == kept and #Journal(A) == records and SentSince(sent, "GUILD", "R") == 0
+		and A.db().settings.killfeed == false and A.db().settings.killfeedTab == true
+		and A.counter("killfeed.tabDoubt") == doubts and A.db().characters[A.guid].feedTabUsed == used)
+
+	-- With the feed's tab there and wanted, the examples go to it, and the
+	-- main chat says so in one line.
+	A.asPlayer(A.env.FCF_OpenNewWindow, L.KILLFEED_TAB, true)
+	local pane = FeedWindow(A)
+	local inPane = pane and #pane.lines or 0
+	from = #A.chat
+	A.ns.Killfeed.Preview()
+	said = Since(A.chat, from)
+	check("with the feed's tab there the examples go to it, the main chat says where, and the tab is not counted as used",
+		pane ~= nil and #pane.lines == inPane + 14 and Tagged(Since(pane.lines, inPane)) == 12 and #said == 1
+		and said[1]:find(L.KILLFEED_PREVIEW_IN_TAB:format(L.KILLFEED_TAB), 1, true) ~= nil
+		and A.db().characters[A.guid].feedTabUsed == used, #said)
+
+	-- The second box unticked: the main chat, tab or no tab. The feed on:
+	-- no word about it being off.
+	A.db().settings.killfeedTab, A.db().settings.killfeed = false, true
+	inPane, from = #pane.lines, #A.chat
+	A.ns.Killfeed.Preview()
+	said = Since(A.chat, from)
+	check("with the second box unticked the examples go to the main chat, and with the feed on nothing says it is off",
+		#pane.lines == inPane and #said == 13 and Tagged(said) == 12 and Has(said, L.KILLFEED_PREVIEW_OFF) == nil, #said)
+	A.db().settings.killfeedTab, A.db().settings.killfeed = true, false
+	A.asPlayer(A.env.FCF_Close, pane.frame)
+
+	from = #A.chat
+	A.slash("help")
+	check("the help lists the command", Has(Since(A.chat, from), L.HELP_PREVIEW) ~= nil)
+end
+FeedPreview()
+
+-- The guild's first rank sets which rank a main needs, which rank alts
+-- hold, and from which rank the members see who falls short. The ranks
+-- here: Warlord 0 (A), Herald 1, Blade 2 (B), Scout 3 (D), Squire 4 (C),
+-- Prey 5 (B's other character, on another game account).
+local function RanksToGive()
+	local L = A.ns.L
+	local alt
+	for _, client in ipairs(Mock.clients) do
+		if client.name == "Bryn Ironvale" then alt = client end
+	end
+	-- One account plays one character at a time: B here, its alt after.
+	local wasOnline = {}
+	for _, client in ipairs({ A, B, D, alt }) do wasOnline[client] = client.online end
+	if alt.online then
+		alt.logout()
+		advance(5)
+	end
+	for _, client in ipairs({ A, B, D }) do
+		if not client.online then client.login() end
+	end
+	advance(60)
+	-- A rank changes in the roster and for the character itself, as a
+	-- promotion does in game.
+	local function SetRank(guid, rank)
+		local roster = Mock.GuildRoster()
+		for _, entry in ipairs(roster) do
+			if entry.guid == guid then entry.rank = rank end
+		end
+		Mock.SetGuildRoster(roster)
+		for _, client in ipairs(Mock.clients) do
+			if client.guid == guid then client.state.rank = rank end
+		end
+		RefreshRosters()
+		advance(2)
+	end
+	local function Rule(client) return client.db().rules.Savages end
+	local function Within(whole, needle) return tostring(whole):find(needle, 1, true) ~= nil end
+	local function RowOf(view, wanted)
+		for _, item in ipairs(Rows(view)) do
+			if item.row.data and wanted(item.row.data) then return item.row end
+		end
+		return nil
+	end
+	local function Marks(tab)
+		local marks = 0
+		for _, item in ipairs(Rows(tab.view)) do
+			if item.row.cells[1].mark.on then marks = marks + 1 end
+		end
+		return marks
+	end
+	local function PlayerKey(guid)
+		return A.ns.Stats.AuthorInfo(guid).playerKey or ("char:" .. guid)
+	end
+	-- The player a character belongs to, as a client's players' list has it.
+	local function PlayerRow(client, guid)
+		for _, row in ipairs(client.ns.Stats.Players("all", "all", true)) do
+			for _, character in ipairs(row.characters) do
+				if character.guid == guid then return row end
+			end
+		end
+		return {}
+	end
+	SetRank(D.guid, 3)
+
+	-- Whose rule it is.
+	A.slash("options")
+	local board = A.ns.UI.Frame()
+	B.slash("options")
+	check("the first rank sets the rule: its Options tab has the button, another rank's has none",
+		A.ns.Ranks.IsMaster() == true and B.ns.Ranks.IsMaster() == false and board.tabFrames.options.ranksButton.shown == true
+		and B.ns.UI.Frame().tabFrames.options.ranksButton.shown == false)
+	B.slash("")
+	check("another rank can neither open the dialog nor set a rule", B.ns.UI.ShowRanksDialog() == false
+		and B.ns.Ranks.Set(3, 4, 2) == false and Rule(B) == nil and Rule(A) == nil)
+	check("with no rule nobody sees anything, the first rank included", A.ns.Ranks.CanSee() == false and #A.ns.Ranks.Issues() == 0)
+	check("the first rank opens the dialog", A.ns.UI.ShowRanksDialog() == true)
+	local dialog = A.ns.UI.RanksDialog()
+	check("it names the guild's own first rank and offers its ranks: the lowest for a main and the officers' to see, until told otherwise",
+		Within(dialog.intro.text, "Warlord") and dialog.expected:Value() == 5 and dialog.reroll:Value() == false
+		and dialog.view:Value() == 2 and dialog.state.text == L.RANKS_STATE_NONE, dialog.intro.text)
+	-- Each choice drops a list of the guild's ranks, the first rank first.
+	local function Pick(picker, value)
+		Click(picker.button)
+		for position, option in ipairs(picker.options) do
+			if option.value == value then Click(picker.rows[position]) end
+		end
+	end
+	Click(dialog.expected.button)
+	local listed = {}
+	for position, row in ipairs(dialog.expected.rows) do
+		if row.shown then listed[position] = row.label.text .. (row.selected and "*" or "") end
+	end
+	check("a click drops the guild's ranks under the choice, numbered from the first to the last, the one chosen lit",
+		dialog.expected.list.shown == true and table.concat(listed, ", ") == "1. Warlord, 2. Herald, 3. Blade, 4. Scout, 5. Squire, 6. Prey*",
+		table.concat(listed, ", "))
+	Click(dialog.reroll.button)
+	check("another list dropped folds the first, and offers not to look at alts before the ranks",
+		dialog.expected.list.shown == false and dialog.reroll.list.shown == true
+		and dialog.reroll.rows[1].label.text == L.RANKS_NONE and dialog.reroll.rows[2].label.text == "1. Warlord")
+	Click(dialog.reroll.button)
+	check("the choice clicked again folds its list", dialog.reroll.list.shown == false)
+	Pick(dialog.expected, 3)
+	check("the list folds as soon as a rank is clicked in it", dialog.expected.list.shown == false)
+	Pick(dialog.reroll, 4)
+	check("a rank clicked in the list is chosen, shown on the choice, and the list folds", dialog.expected:Value() == 3
+		and dialog.expected.button.label.text == "4. Scout" and dialog.expected.list.shown == false
+		and dialog.reroll:Value() == 4 and dialog.reroll.button.label.text == "5. Squire")
+	local spoken = #A.chat
+	Click(dialog.send)
+	advance(5)
+	check("sent, the rule is kept with the names of its ranks, and said in the chat", Rule(A) ~= nil and Rule(A).expected.index == 3
+		and Rule(A).expected.name == "Scout" and Rule(A).reroll.index == 4 and Rule(A).reroll.name == "Squire"
+		and Rule(A).view.index == 2 and ChatSince(A, spoken, L.RANKS_SENT) and Within(dialog.state.text, "Scout"), dialog.state.text)
+	check("the guild gets it", Rule(B) ~= nil and Rule(B).expected.index == 3 and Rule(B).reroll.index == 4 and Rule(B).view.index == 2
+		and Rule(D) ~= nil and Rule(D).at == Rule(A).at)
+	Click(dialog.close)
+
+	-- Only the roster's first rank is believed, and only on a newer rule.
+	local refused = D.counter("ranks.notMaster")
+	B.ns.Sync.Say("G", ("G^%d^5^Prey^-^^5^Prey"):format(Mock.Server() + 60))
+	advance(5)
+	check("a rule from another rank is refused", Rule(D).expected.index == 3 and Rule(A).expected.index == 3
+		and D.counter("ranks.notMaster") == refused + 1)
+	local kept = Rule(D).at
+	A.ns.Sync.Say("G", ("G^%d^5^Prey^-^^5^Prey"):format(kept - 10))
+	A.ns.Sync.Say("G", ("G^%d^5^Prey^-^^5^Prey"):format(Mock.Server() + 3600))
+	advance(5)
+	check("an older rule, or one dated far ahead, changes nothing", Rule(D).at == kept and Rule(D).expected.index == 3)
+
+	-- Who sees.
+	check("the first rank and the ranks from the one chosen see who falls short; a rank under it sees nothing",
+		A.ns.Ranks.CanSee() == true and B.ns.Ranks.CanSee() == true and D.ns.Ranks.CanSee() == false
+		and #D.ns.Ranks.Issues() == 0 and D.ns.Ranks.Issue(C.guid) == nil)
+
+	-- No main named: nothing is guessed.
+	local issue = A.ns.Ranks.Issue(C.guid)
+	check("no main named: a player none of whose characters holds the expected rank falls short", issue ~= nil and issue.kind == "nomain"
+		and issue.have == "Squire" and issue.want == "Scout"
+		and A.ns.Ranks.Line(issue) == L.RANKS_ISSUE_NOMAIN:format(issue.name, "Squire", "Scout"), issue and issue.kind)
+	check("no main named: a player with a character at the expected rank is fine, its low-ranked character too",
+		A.db().authors[alt.guid].profile ~= nil and A.ns.Ranks.Issue(B.guid) == nil and A.ns.Ranks.Issue(alt.guid) == nil)
+	SetRank(B.guid, 5)
+	SetRank(alt.guid, 4)
+	check("no main named, none at the expected rank: the character at the rank of alts is left alone, the other falls short",
+		A.ns.Ranks.Issue(alt.guid) == nil and (A.ns.Ranks.Issue(B.guid) or {}).kind == "nomain")
+	SetRank(B.guid, 2)
+	SetRank(alt.guid, 5)
+
+	-- A main named: held to the expected rank, the others to the rank of alts.
+	B.ns.Identity.SetMain(B.guid)
+	advance(5)
+	issue = A.ns.Ranks.Issue(alt.guid)
+	check("a main named goes out with the profile, and the player's other character must hold the rank of alts",
+		A.db().authors[B.guid].profile.main == A.ns.Util.Tail(B.guid) and A.ns.Ranks.Issue(B.guid) == nil
+		and issue ~= nil and issue.kind == "reroll" and issue.have == "Prey" and issue.want == "Squire"
+		and A.ns.Ranks.Line(issue) == L.RANKS_ISSUE_REROLL:format(issue.name, "Prey", "Squire"), issue and issue.kind)
+	SetRank(alt.guid, 4)
+	check("given the rank of alts, it falls short no more", A.ns.Ranks.Issue(alt.guid) == nil)
+	SetRank(alt.guid, 3)
+	issue = A.ns.Ranks.Issue(alt.guid)
+	check("an alt ranked above the rank of alts falls short too: the rank is the one named", issue ~= nil and issue.kind == "reroll"
+		and issue.have == "Scout")
+	SetRank(alt.guid, 5)
+	D.ns.Identity.SetMain(D.guid)
+	advance(5)
+	check("a main at the expected rank is fine", A.ns.Ranks.Issue(D.guid) == nil)
+	SetRank(D.guid, 5)
+	issue = A.ns.Ranks.Issue(D.guid)
+	check("a main under the expected rank falls short", issue ~= nil and issue.kind == "main" and issue.have == "Prey" and issue.want == "Scout"
+		and A.ns.Ranks.Line(issue) == L.RANKS_ISSUE_MAIN:format(issue.name, "Prey", "Scout"), issue and issue.kind)
+
+	-- The main is the last word of a player's characters: its other
+	-- character, on its own game account, names itself later.
+	B.logout()
+	advance(5)
+	alt.login()
+	advance(30)
+	alt.ns.Identity.SetMain(alt.guid)
+	advance(5)
+	check("the main a player's characters named last is the one held to the expected rank, the one before it an alt now",
+		(A.ns.Ranks.Issue(alt.guid) or {}).kind == "main" and (A.ns.Ranks.Issue(B.guid) or {}).kind == "reroll"
+		and PlayerRow(A, B.guid).mainGuid == alt.guid and PlayerRow(A, B.guid).mainDeclared == true)
+	alt.ns.Identity.SetMain(nil)
+	advance(5)
+	check("none named last, the player has no main again", A.ns.Ranks.Issue(alt.guid) == nil and A.ns.Ranks.Issue(B.guid) == nil
+		and PlayerRow(A, B.guid).mainDeclared == false)
+	alt.logout()
+	advance(5)
+	B.login()
+	advance(30)
+	B.ns.Identity.SetMain(nil)
+	B.ns.Identity.SetMain(B.guid)
+	advance(5)
+
+	-- On the board.
+	GainHK(D)
+	advance(10)
+	A.ns.UI.SetPeriod("all")
+	A.ns.UI.SetBucket("all")
+	A.ns.UI.SelectTab("characters")
+	local marked = RowOf(board.tabFrames.characters.view, function(data) return data.guid == D.guid end)
+	local plain = RowOf(board.tabFrames.characters.view, function(data) return data.guid == A.guid end)
+	check("on the characters' ranking a mark sits before the rank of a character that falls short, and nowhere else",
+		marked ~= nil and marked.cells[1].mark.on == true and marked.cells[1].mark.shown == true
+		and plain ~= nil and plain.cells[1].mark.on == false and plain.cells[1].mark.shown == false)
+	local function TipHas(row, wanted)
+		row:GetScript("OnEnter")(row)
+		for _, line in ipairs(A.env.GameTooltip.tooltipLines or {}) do
+			if line == wanted then return true end
+		end
+		return false
+	end
+	check("its tooltip says the rank it holds and the one expected", marked ~= nil and TipHas(marked, A.ns.Ranks.Line(issue))
+		and plain ~= nil and not TipHas(plain, A.ns.Ranks.Line(issue)))
+	A.ns.UI.SetPeriod("week")
+	A.ns.UI.SelectTab("players")
+	local playerList = board.tabFrames.players
+	local rowsBefore = #Rows(playerList.view)
+	check("the players' bar offers the ranks to give to who may see them", playerList.filters.ranksButton.shown == true
+		and playerList.filters.ranks ~= true and Marks(playerList) >= 1, Marks(playerList))
+	Click(playerList.filters.ranksButton)
+	local shown, allMarked, idle = Rows(playerList.view), true, false
+	for _, item in ipairs(shown) do
+		if item.row.data.rankMark ~= true then allMarked = false end
+		if item.row.data.kills == 0 and item.row.data.deaths == 0 then idle = true end
+	end
+	local expected = {}
+	for _, entry in ipairs(A.ns.Ranks.Issues()) do expected[PlayerKey(entry.guid)] = true end
+	check("its button keeps the players with a rank to give, those without a kill in the period too",
+		#shown >= 3 and allMarked and idle and #shown == count(expected) and playerList.filters.ranksButton.selected == true,
+		#shown .. " shown, " .. count(expected) .. " expected, " .. rowsBefore .. " before")
+	local flagged = RowOf(playerList.view, function(data) return data.key == PlayerKey(D.guid) end)
+	check("a player's tooltip lists the ranks to give among its characters", flagged ~= nil and TipHas(flagged, L.RANKS_TOOLTIP)
+		and TipHas(flagged, A.ns.Ranks.Line(issue)))
+	Click(playerList.filters.ranksButton)
+	check("the button again brings the ranking back", #Rows(playerList.view) == rowsBefore and playerList.filters.ranks ~= true, #Rows(playerList.view))
+
+	-- A member of the rank chosen, demoted, then promoted back: the right to
+	-- see is read from the rank held now, each time.
+	B.ns.UI.Show()
+	B.ns.UI.SetPeriod("all")
+	B.ns.UI.SelectTab("players")
+	local theirs = B.ns.UI.Frame().tabFrames.players
+	check("a member of the rank chosen sees the marks and the button", B.ns.Ranks.CanSee() == true and Marks(theirs) >= 1
+		and theirs.filters.ranksButton.shown == true, Marks(theirs))
+	Click(theirs.filters.ranksButton)
+	SetRank(B.guid, 3)
+	check("demoted under it, the member sees nothing of it: no mark, no button, no filter left on, nothing to list",
+		B.ns.Ranks.CanSee() == false and Marks(theirs) == 0 and theirs.filters.ranksButton.shown == false
+		and theirs.filters.ranks ~= true and #B.ns.Ranks.Issues() == 0 and B.ns.Ranks.Issue(D.guid) == nil
+		and B.ns.Ranks.PlayerIssues(PlayerKey(D.guid)) == nil, Marks(theirs))
+	B.logout()
+	B.login()
+	advance(30)
+	RefreshRosters()
+	B.ns.UI.Show()
+	B.ns.UI.SetPeriod("all")
+	B.ns.UI.SelectTab("players")
+	theirs = B.ns.UI.Frame().tabFrames.players
+	check("and still nothing after a reload", B.ns.Ranks.CanSee() == false and Marks(theirs) == 0
+		and theirs.filters.ranksButton.shown == false and Rule(B) ~= nil)
+	SetRank(B.guid, 2)
+	check("promoted back, the member sees them again", B.ns.Ranks.CanSee() == true and Marks(theirs) >= 1
+		and theirs.filters.ranksButton.shown == true, Marks(theirs))
+	-- A change of rank on its way: the roster already says one rank while
+	-- the client still says the other.
+	B.state.rank = 3
+	RefreshRosters()
+	advance(2)
+	check("while the roster and the client disagree on the rank, the lower one is believed", B.ns.Identity.MyRankIndex() == 3
+		and B.ns.Ranks.CanSee() == false)
+	B.state.rank = 2
+	RefreshRosters()
+	advance(2)
+	check("agreed again, the member sees", B.ns.Ranks.CanSee() == true)
+	B.ns.UI.Hide()
+
+	-- A rank the rule names is renamed: the rule rests rather than point elsewhere.
+	Mock.RANKS[4] = "Ranger"
+	RefreshRosters()
+	advance(2)
+	local _, why = A.ns.Ranks.Rule()
+	A.ns.UI.ShowRanksDialog()
+	check("a rank of the rule renamed: the rule rests for everyone, and its dialog says why", A.ns.Ranks.Rule() == nil and why == "renamed"
+		and A.ns.Ranks.CanSee() == false and #A.ns.Ranks.Issues() == 0 and B.ns.Ranks.CanSee() == false
+		and dialog.state.text == L.RANKS_STATE_RENAMED, tostring(why))
+	Mock.RANKS[4] = "Scout"
+	RefreshRosters()
+	advance(2)
+	check("named as before, the rule is in force again", A.ns.Ranks.Rule() ~= nil and A.ns.Ranks.CanSee() == true and B.ns.Ranks.CanSee() == true)
+
+	-- A member away when the rule changes gets it once back, even so soon
+	-- after its last hello that the next one is not due: every login sends
+	-- its inventory, and the first rank answers that too.
+	D.ns.Sync.SendHello("recovery")
+	advance(5)
+	local skipped = D.counter("sync.helloSkipped")
+	D.logout()
+	advance(70)
+	A.ns.Ranks.Set(3, 4, 1)
+	advance(5)
+	local newest = Rule(A).at
+	check("a rule set again reaches the members online at once, and moves the right to see with it", Rule(B).at == newest
+		and Rule(B).view.index == 1 and B.ns.Ranks.CanSee() == false and D.saved.rules.Savages.at < newest)
+	D.login()
+	advance(90)
+	check("a member away then gets it once back, its hello skipped: the first rank says the rule again to who logs in",
+		Rule(D).at == newest and Rule(D).view.index == 1 and D.counter("sync.helloSkipped") == skipped + 1,
+		D.counter("sync.helloSkipped") - skipped)
+
+	-- A member who just joined, with nothing to its name, gets the rule at
+	-- its first hello.
+	local newcomer = NewClient({ name = "Nell Quickstep", guid = Guid(42), class = "ROGUE", race = "Gnome", guild = "Savages",
+		lifetime = 0, rank = 5 })
+	local grown = Mock.GuildRoster()
+	grown[#grown + 1] = { guid = newcomer.guid, rank = 5 }
+	Mock.SetGuildRoster(grown)
+	RefreshRosters()
+	advance(70)
+	newcomer.login()
+	advance(100)
+	check("a member who just joined gets the rule at its first hello", Rule(newcomer) ~= nil and Rule(newcomer).at == newest)
+
+	-- The first rank logs in after a member who missed a change: it says the
+	-- rule again by itself.
+	D.logout()
+	advance(5)
+	A.ns.Ranks.Set(3, 4, 2)
+	advance(5)
+	newest = Rule(A).at
+	A.logout()
+	advance(5)
+	D.login()
+	advance(60)
+	check("with the first rank away, a member back holds the rule it had", Rule(D).at < newest)
+	A.login()
+	advance(60)
+	check("the first rank says the rule again once logged in", Rule(D).at == newest and Rule(D).view.index == 2)
+	A.ns.UI.Show()
+	board = A.ns.UI.Frame()
+	A.ns.UI.ShowRanksDialog()
+	dialog = A.ns.UI.RanksDialog()
+
+	-- Removed.
+	A.ns.UI.ShowRanksDialog()
+	spoken = #A.chat
+	Click(dialog.remove)
+	advance(5)
+	check("removed by the first rank, the rule is gone for the guild, said in the chat", A.ns.Ranks.Rule() == nil and B.ns.Ranks.Rule() == nil
+		and Rule(B).expected == nil and A.ns.Ranks.CanSee() == false and ChatSince(A, spoken, L.RANKS_REMOVED)
+		and dialog.state.text == L.RANKS_STATE_NONE)
+
+	-- The first rank handed over: the button and the dialog go with it.
+	A.ns.UI.SelectTab("options")
+	SetRank(A.guid, 1)
+	check("a character that no longer holds the first rank loses the button and the dialog", A.ns.Ranks.IsMaster() == false
+		and board.tabFrames.options.ranksButton.shown == false and dialog.shown == false and A.ns.Ranks.Set(3, 4, 2) == false
+		and A.ns.UI.ShowRanksDialog() == false)
+	SetRank(A.guid, 0)
+	SetRank(D.guid, 3)
+
+	-- A second character of A's game account, as its own login would have
+	-- left it here and with the guild.
+	local minor = Guid(41)
+	Mock.AddPlayer(minor, { name = "Aldric Minor", class = "MAGE", race = "Human", faction = "Alliance", guild = "Savages" })
+	local roster = Mock.GuildRoster()
+	roster[#roster + 1] = { guid = minor, rank = 4 }
+	Mock.SetGuildRoster(roster)
+	RefreshRosters()
+	A.db().characters[minor] = { createdAt = Mock.Server() }
+	for _, client in ipairs({ A, B }) do
+		local author = client.ns.Records.Author(minor)
+		author.profile = { name = "Aldric Minor", class = "MAGE", race = "Human", playerKey = A.ns.Identity.me.playerKey, level = 12,
+			version = "1.0.3" }
+		author.profileVerified = true
+	end
+	A.db().authors[minor].own = true
+	A.ns.Stats.Invalidate()
+	B.ns.Stats.Invalidate()
+	A.ns.UI.SetPeriod("week")
+	A.ns.UI.SelectTab("me")
+	local mineTab = board.tabFrames.me
+	-- The buttons of a row: 6 my main, 7 its name, 8 to 10 the roles T, H, D.
+	local function Cell(guid, at)
+		local row = RowOf(mineTab.view, function(data) return data.guid == guid end)
+		return row and row.cells[at].button
+	end
+	check("the Me tab lists every character of mine, with or without a kill in the period", Cell(A.guid, 6) ~= nil and Cell(minor, 6) ~= nil
+		and RowOf(mineTab.view, function(data) return data.guid == minor end).data.kills == 0)
+	local own, said = A.ns.Identity.Role(), A.counter("sync.out.C.Success")
+	Click(Cell(minor, 8))
+	advance(5)
+	check("the role of another character of the account is set from here, lit on its row, and said to the guild in its place",
+		A.db().characters[minor].role == "T" and A.ns.Identity.Role(minor) == "T" and Cell(minor, 8).selected == true
+		and Cell(minor, 9).selected ~= true and A.ns.Identity.Role() == own and A.counter("sync.out.C.Success") == said + 1
+		and B.db().authors[minor].profile.role == "T", tostring(B.db().authors[minor].profile.role))
+	Click(Cell(minor, 8))
+	advance(5)
+	check("the chosen role clicked again removes it there too", A.db().characters[minor].role == nil
+		and Cell(minor, 8).selected ~= true and B.db().authors[minor].profile.role == nil)
+	local refusedRole = B.counter("sync.roleRefused")
+	D.ns.Sync.Say("C", ("C^%s^H"):format(A.ns.Util.Tail(minor)))
+	advance(5)
+	check("a member cannot say the role of another player's character", B.db().authors[minor].profile.role == nil
+		and B.counter("sync.roleRefused") == refusedRole + 1)
+	B.ns.UI.Show()
+	B.ns.UI.SelectTab("me")
+	local bryn = RowOf(B.ns.UI.Frame().tabFrames.me.view, function(data) return data.guid == alt.guid end)
+	local was = B.db().authors[alt.guid].profile.role
+	if bryn then Click(bryn.cells[was == "H" and 8 or 9].button) end
+	check("a character of mine on another game account keeps its own role: its buttons rest", bryn ~= nil
+		and bryn.cells[9].button.resting == true and B.db().authors[alt.guid].profile.role == was and B.db().characters[alt.guid] == nil
+		and B.ns.Identity.SetRole("H", alt.guid) == nil and B.db().characters[alt.guid] == nil)
+	B.ns.UI.Hide()
+
+	-- My main, named in the Me tab.
+	local profiles = A.counter("sync.out.P.Success")
+	Click(Cell(minor, 6))
+	advance(5)
+	check("a click names a character my main: kept for the account, lit, said to the guild with my profile",
+		A.db().settings.main == minor and A.ns.Identity.Main() == minor and Cell(minor, 6).selected == true
+		and Cell(minor, 6).label.text == L.ME_MAIN and Cell(A.guid, 6).selected ~= true and Cell(A.guid, 6).label.text == L.ME_MAIN_SET
+		and A.counter("sync.out.P.Success") == profiles + 1 and B.db().authors[A.guid].profile.main == A.ns.Util.Tail(minor))
+	-- An older word of the other character, dated after mine: for my own
+	-- player the main is the one set here.
+	A.db().authors[minor].profile.main = false
+	A.db().authors[minor].profileAt = Mock.Server() + 30
+	A.ns.Stats.Invalidate()
+	A.ns.Ranks.Set(3, nil, 2)
+	advance(5)
+	check("for my own player the main is the one set here, whatever my other characters said last, and the rule holds it to its rank",
+		(A.ns.Ranks.Issue(minor) or {}).kind == "main" and A.ns.Ranks.Issue(A.guid) == nil)
+	A.ns.Ranks.Set(nil)
+	advance(5)
+	local alias = A.ns.Identity.Alias()
+	A.ns.Identity.SetAlias("")
+	advance(5)
+	local function NameOfPlayer(client)
+		for _, row in ipairs(client.ns.Stats.Players("all", "all", true)) do
+			for _, character in ipairs(row.characters) do
+				if character.guid == A.guid then return row.name, row.mainDeclared end
+			end
+		end
+		return nil
+	end
+	local myName, declared = NameOfPlayer(A)
+	local seen, seenDeclared = NameOfPlayer(B)
+	check("with no display name chosen, a player goes by its main, here and for the guild", myName == "Aldric Minor" and declared == true
+		and seen == "Aldric Minor" and seenDeclared == true, tostring(myName) .. " / " .. tostring(seen))
+	Click(Cell(minor, 6))
+	advance(5)
+	myName, declared = NameOfPlayer(A)
+	seen, seenDeclared = NameOfPlayer(B)
+	check("the main clicked again names none: the player goes by its character with the most kills, as before",
+		A.db().settings.main == nil and Cell(minor, 6).selected ~= true and B.db().authors[A.guid].profile.main == false
+		and myName == "Aldric Stormhand" and declared == false and seen == "Aldric Stormhand" and seenDeclared == false,
+		tostring(myName) .. " / " .. tostring(seen))
+	A.ns.Identity.SetAlias(alias or "")
+	advance(5)
+
+	-- As the next sections expect the guild: the second character gone, and
+	-- each account on the character it was playing.
+	roster = Mock.GuildRoster()
+	for position = #roster, 1, -1 do
+		if roster[position].guid == minor then table.remove(roster, position) end
+	end
+	Mock.SetGuildRoster(roster)
+	A.db().characters[minor], A.db().authors[minor], B.db().authors[minor] = nil, nil, nil
+	RefreshRosters()
+	A.ns.Stats.Invalidate()
+	B.ns.Stats.Invalidate()
+	A.ns.UI.SetPeriod("week")
+	A.ns.UI.SelectTab("players")
+	A.slash("")
+	if not wasOnline[B] then
+		B.logout()
+		advance(5)
+	end
+	if wasOnline[alt] then
+		alt.login()
+		advance(30)
+	end
+	if not wasOnline[D] then D.logout() end
+	newcomer.logout()
+	roster = Mock.GuildRoster()
+	for position = #roster, 1, -1 do
+		if roster[position].guid == newcomer.guid then table.remove(roster, position) end
+	end
+	Mock.SetGuildRoster(roster)
+	RefreshRosters()
+	advance(5)
+end
+RanksToGive()
+
+--------------------------------------------------------------------------------
 section("The demo tour")
 --------------------------------------------------------------------------------
 
@@ -2710,6 +4140,22 @@ local function DemoTour()
 	for _, candidate in ipairs(Mock.clients) do
 		if candidate.name == "Bryn Ironvale" then client = candidate end
 	end
+	-- The tour needs two things of the board it plays on, that of B's alt.
+	-- Its player's other character: scene 1 finds the player by an alt's
+	-- name, scene 4 takes another display name. And an enemy on the hunting
+	-- board for scene 5: A's kills name theirs. Both come with a journal
+	-- that the sync brings from a holder, B's included: one account plays
+	-- one character at a time. How far the alt's short sessions got with
+	-- that depends on the seconds the sections above take, so the tour
+	-- waits for the journals: a few minutes at most, a holder gives its
+	-- pages one after the other.
+	local function Holds(author)
+		local entry = client.db().authors[author.guid]
+		return entry ~= nil and entry.profile ~= nil and (entry.head or 0) > 0
+	end
+	local ready, waited = Mock.advanceUntil(function() return Holds(B) and Holds(A) end, 5 * 60)
+	check("before the tour, its character holds the journal of its player's other character and one with named kills",
+		ready, ("B %s, A %s after %d s"):format(tostring(Holds(B)), tostring(Holds(A)), waited))
 	local chunk = assert(loadfile("demo/KBSDemo/KBSDemo.lua"))
 	setfenv(chunk, client.env)
 	chunk("KBSDemo", {})
@@ -2778,6 +4224,187 @@ end
 DemoTour()
 
 --------------------------------------------------------------------------------
+section("Kill feed: a tab in doubt")
+--------------------------------------------------------------------------------
+
+-- Run last: these checks log A out and in several times, and the sections
+-- above were written against the course of events without them.
+FeedTabDoubts()
+-- The one chat window the addon opened in the whole run is the tab the
+-- player asked it for, with the button of the Options tab.
+check("through these too the addon opened, closed and selected no chat window", (A.addonChatWrites or 0) == 1
+	and (A.addonChatWriteNames or {})[1] == "FCF_OpenNewWindow", table.concat(A.addonChatWriteNames or {}, ", "))
+
+--------------------------------------------------------------------------------
+section("Sync fixes of 1.0.3")
+--------------------------------------------------------------------------------
+
+-- Four things the sync did that its own comments said it did not: a member
+-- with nothing to list logged in without a word, every hello was answered
+-- like a newcomer's, a member asked one holder for every page at once, and
+-- a member that came back stayed absent until its next hello. They are
+-- played in a guild of its own, whose members hear nobody else: every
+-- message counted here is theirs, whatever the other guild is doing. The
+-- mock has one roster for everyone, so they are added to it.
+local function SyncFixes()
+	local guild = "Lantern Guard"
+	local O = NewClient({ name = "Orin Blackwood", guid = Guid(51), class = "HUNTER", guild = guild, lifetime = 200, rank = 3 })
+	local P = NewClient({ name = "Petra Winterfall", guid = Guid(52), class = "MAGE", guild = guild, lifetime = 90, rank = 3 })
+	local N = NewClient({ name = "Nerys Calloway", guid = Guid(53), class = "PRIEST", guild = guild, lifetime = 0, rank = 4 })
+	local Q = NewClient({ name = "Quill Ambermoor", guid = Guid(54), class = "WARRIOR", guild = guild, lifetime = 42, rank = 4 })
+	local roster = Mock.GuildRoster()
+	for _, client in ipairs({ O, P, N, Q }) do
+		roster[#roster + 1] = { guid = client.guid, rank = client.state.rank }
+	end
+	Mock.SetGuildRoster(roster)
+	-- The messages of a kind a member sent since a mark: to the guild, or
+	-- to one member by whisper.
+	local function Said(client, since, kind, target)
+		local n = 0
+		for index = since + 1, #network.sent do
+			local sent = network.sent[index]
+			if sent.from == client.name and sent.target == target and sent.text:sub(1, 2) == kind .. "^" then n = n + 1 end
+		end
+		return n
+	end
+	-- Whether a client holds an author's journal up to its head.
+	local function Holds(client, author)
+		return Held(client, author) == Held(author, author)
+	end
+	-- The journals of others in what a client's last session saved.
+	local function Kept(client)
+		local n = 0
+		for guid, author in pairs(client.saved.authors or {}) do
+			if guid ~= client.guid and (author.head or 0) > 0 then n = n + 1 end
+		end
+		return n
+	end
+	local function Kills(client, n)
+		for index = 1, n do
+			client.fire("UNIT_DIED", HORDE[index % #HORDE + 1].guid)
+			GainHK(client)
+			advance(5)
+		end
+	end
+
+	-- Two members, each with a journal the other holds. Each then says the
+	-- head of its journal: a hello goes out again only when the head moved
+	-- since, so none of theirs is due while the rest plays.
+	O.login()
+	P.login()
+	advance(20)
+	Kills(O, 6)
+	Kills(P, 3)
+	O.ns.Sync.SendHello("recovery")
+	P.ns.Sync.SendHello("recovery")
+	advance(30)
+	check("in a guild of their own, two members hold each other's journal",
+		Held(O, O) == 6 and Held(P, P) == 3 and Holds(P, O) and Holds(O, P), ("%d and %d"):format(Held(P, O), Held(O, P)))
+	local Otail, Ptail = O.ns.Identity.me.tail, P.ns.Identity.me.tail
+
+	-- A hello that announces a journal is not a newcomer's: nobody answers
+	-- it with the list of what they hold.
+	local sinceHello = #network.sent
+	O.ns.Sync.SendHello("recovery")
+	advance(25)
+	check("a hello that announces a journal is not answered with everything the others hold",
+		Said(O, sinceHello, "H") == 1 and Said(P, sinceHello, "A") == 0, Said(P, sinceHello, "A"))
+
+	-- A newcomer whose history is taken from the probe two seconds after
+	-- its first hello: the hello that announces the imported journal comes
+	-- while the holders still wait for an inventory, and leaves their
+	-- answer due. Its counter cannot be read at login, as when logging in
+	-- inside a battleground, so nothing is imported before that hello.
+	Q.probe = ProbeOf(Q, "Quill Ambermoor-" .. Mock.REALM)
+	Q.state.secretStats = true
+	Q.login()
+	local greeted = Mock.advanceUntil(function() return Q.counter("sync.out.H.Success") >= 1 end, 30)
+	advance(2)
+	Q.state.secretStats = false
+	Q.slash("import")
+	local told = Mock.advanceUntil(function() return Holds(Q, O) and Holds(Q, P) end, 120)
+	check("a newcomer whose history comes in right after its first hello is still told what the guild holds",
+		greeted and Q.counter("sync.hello.import") == 1 and Held(Q, Q) == 16 and told,
+		("%d imported, %d and %d held"):format(Held(Q, Q), Held(Q, O), Held(Q, P)))
+
+	-- A member who just installed the addon holds nothing. Its first
+	-- session ends two seconds after its hello, before anyone answered.
+	N.login()
+	local first = Mock.advanceUntil(function() return N.counter("sync.out.H.Success") >= 1 end, 30)
+	advance(2)
+	N.logout()
+	check("a first session that ends right after its hello leaves nothing held", first and Kept(N) == 0, Kept(N))
+	-- Back a minute later it has no inventory to send: it says hello again,
+	-- however recent the last one, and the holders tell it what there is.
+	-- It asks a holder for one page at a time: the requests in flight are
+	-- looked at ten times a second.
+	advance(60)
+	N.login()
+	local most = 0
+	local came = Mock.advanceUntil(function()
+		local asked = {}
+		for _, request in pairs(N.ns.Sync.State().requests) do
+			asked[request.holder] = (asked[request.holder] or 0) + 1
+			most = math.max(most, asked[request.holder])
+		end
+		return Holds(N, O) and Holds(N, P) and Holds(N, Q)
+	end, 300, 0.1)
+	check("back within ten minutes with nothing to list, a member says hello again and the journals come",
+		came and N.counter("sync.helloSkipped") == 0 and N.counter("sync.hello.login") == 2,
+		("%d skipped, %d said"):format(N.counter("sync.helloSkipped"), N.counter("sync.hello.login")))
+	check("it asks a holder for one page at a time", most == 1, most)
+	-- What follows is played on a member that holds the guild's journals.
+	if not came then return end
+
+	-- It leaves. A request it sent on its way out reaches P, and the server
+	-- turns P's answer back: nobody by that name is playing.
+	N.logout()
+	local turned = P.counter("sync.notFoundHidden")
+	P.fire("CHAT_MSG_ADDON", "KBS", ("Q^%s^1"):format(Otail), "WHISPER", N.name)
+	local absent = Mock.advanceUntil(function() return P.counter("sync.notFoundHidden") > turned end, 30)
+	-- Back at once, it asks again. It holds journals now, so no hello of
+	-- its own is due: its request is all P heard of it since.
+	N.login()
+	local sinceBack = #network.sent
+	advance(2)
+	local dropped = P.counter("sync.dropOffline")
+	P.fire("CHAT_MSG_ADDON", "KBS", ("Q^%s^1"):format(Otail), "WHISPER", N.name)
+	advance(10)
+	check("a member the server called absent is answered as soon as it speaks again, hello or not",
+		absent and P.counter("sync.dropOffline") == dropped and Said(P, sinceBack, "B", N.name) >= 1,
+		("%d dropped, %d sent"):format(P.counter("sync.dropOffline") - dropped, Said(P, sinceBack, "B", N.name)))
+	local listed = Mock.advanceUntil(function() return Said(N, sinceBack, "I") >= 1 end, 30)
+	check("with journals to list, a login that soon says its inventory and no hello",
+		listed and N.counter("sync.helloSkipped") == 1 and N.counter("sync.hello.login") == 2 and Said(N, sinceBack, "H") == 0,
+		("%d skipped, %d said"):format(N.counter("sync.helloSkipped"), N.counter("sync.hello.login")))
+
+	-- A holder with three pages going out, the most it takes on, says so to
+	-- the next member who asks, which asks again a little later. O's chat
+	-- is in lockdown, as in a battleground, while three requests of P's
+	-- reach it: their pages wait. N, which lacks the last record of O's
+	-- journal, then asks O for it.
+	local copy = N.db().authors[O.guid]
+	copy.log[copy.head] = nil
+	copy.head, copy.count = copy.head - 1, copy.count - 1
+	O.state.chatLocked = true
+	for _ = 1, 3 do
+		O.fire("CHAT_MSG_ADDON", "KBS", ("Q^%s^1"):format(Ptail), "WHISPER", P.name)
+	end
+	local refused, busy, timeouts = O.counter("sync.pageRefused"), N.counter("sync.pageBusy"), N.counter("sync.requestTimeout")
+	N.ns.Sync.State().holders[Otail] = { [N.ns.Identity.Canon(O.name)] = { head = Held(O, O), count = Held(O, O), at = Mock.Server() } }
+	N.ns.Sync.Schedule()
+	advance(1)
+	O.state.chatLocked = false
+	local again = Mock.advanceUntil(function() return Holds(N, O) end, 120)
+	check("a holder with three pages going out says it is busy, and gives the page when asked again",
+		O.counter("sync.pageRefused") == refused + 1 and N.counter("sync.pageBusy") == busy + 1
+		and N.counter("sync.requestTimeout") == timeouts and again,
+		("%d refused, %d busy, %d timed out"):format(O.counter("sync.pageRefused") - refused, N.counter("sync.pageBusy") - busy,
+			N.counter("sync.requestTimeout") - timeouts))
+end
+SyncFixes()
+
+--------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")
 --------------------------------------------------------------------------------
 
@@ -2792,8 +4419,12 @@ for _, client in ipairs(Mock.clients) do
 end
 -- 25000 since 1.0.0: one more member (an alt) and the time each member was
 -- last heard from add about 700 bytes. 26000 since 1.0.1: when each member
--- last stated its profile, about 250 bytes.
-check("the saved data stays small", #Serialize(A.db()) < 26000, #Serialize(A.db()))
+-- last stated its profile, about 250 bytes. 32000 since 1.0.3: the kill
+-- feed's eight last looks at its tab, about 1600 bytes, then about 2900
+-- for the guild's rule on ranks, the profile of a member who just joined
+-- and the kills and deaths that the checks of the feed's tab on request
+-- and of its levels write to the journal.
+check("the saved data stays small", #Serialize(A.db()) < 32000, #Serialize(A.db()))
 check("records are stored as strings, not tables", (function()
 	for _, entry in pairs(A.db().authors[Guid(1)].log) do
 		if type(entry) ~= "string" then return false end

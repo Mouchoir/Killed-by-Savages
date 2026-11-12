@@ -167,6 +167,7 @@ local function VictimFields(facts)
 		vclass = Safe(facts.class) ~= SECRET and facts.class or nil,
 		vrace = Safe(facts.race) ~= SECRET and facts.race or nil,
 		vlevel = type(facts.level) == "number" and facts.level > 0 and facts.level or nil,
+		vcon = Identity.CONS[facts.con] and facts.con or nil,
 	}
 end
 
@@ -380,6 +381,10 @@ local function KillerFields(first)
 		fields.kname = Safe(facts.name) ~= SECRET and facts.name or nil
 		fields.kclass = Safe(facts.class) ~= SECRET and facts.class or nil
 		fields.krace = Safe(facts.race) ~= SECRET and facts.race or nil
+		-- Its level and how the game rates it against us, when it is still a
+		-- unit the client knows (a target, a nameplate) as the recap is read.
+		fields.klevel = type(facts.level) == "number" and facts.level > 0 and facts.level or nil
+		fields.kcon = Identity.CONS[facts.con] and facts.con or nil
 		if fields.kname == nil and Safe(first.sourceName) ~= SECRET then fields.kname = Safe(first.sourceName) end
 		return fields
 	elseif kind == "Pet" then

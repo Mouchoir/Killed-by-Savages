@@ -12,14 +12,14 @@ read_globals = {
 	"UIParent", "UISpecialFrames", "DEFAULT_CHAT_FRAME", "ChatFontNormal", "GameFontHighlightSmall",
 	"Enum", "C_RestrictedActions", "C_Secrets", "C_DateAndTime", "C_AddOns", "GetAddOnMetadata",
 	"LibStub", "InCombatLockdown", "PlaySound", "SOUNDKIT", "GameTooltip", "CreateColor", "IsMouseButtonDown", "NEW_CHAT_WINDOW",
-	"C_SpecializationInfo", "GetSpecialization", "GetSpecializationRole", "UnitGroupRolesAssigned",
+	"C_SpecializationInfo", "GetSpecialization", "GetSpecializationRole", "UnitGroupRolesAssigned", "IsMacClient",
 	"C_Texture", "C_XMLUtil", "C_ClassColor", "RAID_CLASS_COLORS", "NineSliceUtil",
 	"ScrollUtil", "CreateScrollBoxListLinearView", "CreateDataProvider", "ScrollBoxConstants",
 	"PanelTemplates_SelectTab", "PanelTemplates_DeselectTab", "PanelTemplates_SetNumTabs", "PanelTemplates_TabResize",
 	"Settings", "STANDARD_TEXT_FONT", "GameFontNormalHuge", "GameFontNormalLarge", "LOCALIZED_CLASS_NAMES_MALE",
 	"ChatFrame_AddMessageEventFilter", "ERR_CHAT_PLAYER_NOT_FOUND_S",
 	"FCF_OpenNewWindow", "FCF_Close", "FCF_IsChatWindowIndexActive", "FCFDock_GetSelectedWindow",
-	"FCFDock_SelectWindow", "GENERAL_CHAT_DOCK", "GetChatWindowInfo", "NUM_CHAT_WINDOWS", "Constants",
+	"FCFDock_SelectWindow", "GENERAL_CHAT_DOCK", "GetChatWindowInfo", "NUM_CHAT_WINDOWS", "Constants", "C_UI", "ReloadUI",
 	"HideUIPanel", "SettingsPanel",
 
 	-- Where we are
@@ -33,7 +33,8 @@ read_globals = {
 
 	-- Guild
 	"IsInGuild", "GetGuildInfo", "GetNumGuildMembers", "GetGuildRosterInfo", "GuildRoster", "C_GuildInfo",
-	"GuildControlGetRankFlags",
+	"GuildControlGetRankFlags", "GuildControlGetNumRanks", "GuildControlGetRankName",
+	"C_PlayerInfo", "Enum", "QuestDifficultyColors", "C_Texture",
 
 	-- PvP
 	"GetPVPSessionStats", "GetPVPLifetimeStats", "GetPVPYesterdayStats",

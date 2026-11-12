@@ -10,6 +10,8 @@ guild, so everyone sees the same board.
 Built for the guild Savages; it works for any guild, on either faction: the
 enemy is the opposite faction of whoever runs it.
 
+Discord (new versions, bug reports, ideas): https://discord.gg/wqYecPR8yC
+
 ## How it counts
 
 On Forever the combat log is closed to addons and many values are secret.
@@ -54,33 +56,69 @@ and the chain, and are dropped if the author's own count contradicts them.
 | `/kbs` | Open or close the kill board |
 | `/kbs status` | Where the addon stands on this character |
 | `/kbs options` | Open the options |
+| `/kbs discord` | The Discord link, in the chat and selected in the Options tab, ready to copy |
+| `/kbs preview` | Example lines of the kill feed, to see how it reads on this client; nothing is recorded |
 | `/kbs import` | Take the probe's records into this character's journal (see below) |
 | `/kbs debug` | Errors and sync state, for bug reports |
 
 Options, in the board's Options tab (at the right end of the tab row; the
-game's Settings page for the addon opens it too): minimap button, window
-scale and the kill feed. The scale applies when the slider is let go. The
+game's Settings page for the addon opens it too): minimap button, reminders
+of new versions, window scale and the kill feed. The scale applies when the
+slider is let go. The
 kill feed is off by default. Ticked, every kill and death of the guild in
-the world reads "X killed Y (2-1)" in the chat, the score being the kills
-of the one named first on the other against the other's on them, in the
-world. A battleground hides whom a member kills, so its kills and deaths
-give no line: the match gives one when it ends, from its scoreboard, "X
-finished a match in Arathi Basin: 12 kills, 3 killing blows, 4 deaths".
-The lines go to a chat tab named "Kills" when the player has made one
-(right-click the General tab, "New Window", name it Kills), else to the
+the world is a line of the chat, the member of the guild always first: "X
+(38) killed Y (41) (2-1)", "X (38) was killed by Y (41) (2-2)". The score
+is the member's kills on that enemy against the enemy's on the member, in
+the world. A name is followed by its level: the member's from the guild
+roster (its profile when the roster has none), the enemy's as the member's
+client read it at that kill or death, in the colour the game itself rated
+it with against the member (grey, green, yellow, orange or red, as on the
+target frame), and as the target frame's skull when the game hid it as too
+high. The addon rates nothing by itself: a level recorded by a version
+before 1.0.3 has no rating and shows plain, and an enemy whose level the
+client did not read gets none. A battleground hides whom a member kills,
+so its kills and deaths give no line: the match gives one when it ends,
+from its scoreboard, "X (38) finished a match in Arathi Basin: 12 kills, 3
+killing blows, 4 deaths".
+The lines go to a chat tab named "Kills" when there is one, else to the
 main chat, with a line once per session saying how to make the tab; the
 second box, "In the chat tab named Kills", unticked, sends them to the main
-chat anyway. Closing the tab turns the feed off. The addon never opens,
-closes or selects a chat window itself: run from an addon, the game's chat
-window code marks the chat edit box as the addon's, and for the rest of the
+chat anyway. The tab is the player's to make (right-click the General tab,
+"New Window", name it Kills), or the Options tab makes it: while the feed
+wants a tab that is not there, a button, "Create the Kills tab (reloads the
+interface)", opens it and reloads the interface in the same breath. Closing
+the tab turns the feed off. That button aside, the addon never opens,
+closes or selects a chat window: run from an addon, the game's chat window
+code marks the chat edit box as the addon's, and for the rest of the
 session a group message fails on a secret value and `/invite` is refused as
-a protected call (seen with 1.0.0, fixed in 1.0.1).
+a protected call (seen with 1.0.0, fixed in 1.0.1). The reload that follows
+the button ends that session, and the mark with it.
+
+`/kbs preview` writes a dozen example lines where the feed's lines go (its
+tab when there is one and it is wanted, else the main chat), made by the
+code of the real lines from kills and deaths that never happened, with the
+character played as the member: a way to see the colours, the skull and the
+wording on one's own client. Each line is marked as an example; nothing is
+recorded, nothing is sent to the guild, and no setting changes.
+
+The Options tab also holds the link to the addon's Discord, in a box: an
+addon cannot open a browser, so the box keeps its text whatever is typed in
+it and selects it whole when clicked, for the copy shortcut to take it.
+`/kbs discord` says the link in the chat and opens the tab with the link
+selected.
 
 A player shows on the players ranking under its display name alone, its
 characters in the tooltip. The name is set in the Me tab: any name, or the
 name of one of its characters with the button next to it. The name is the
 account's: a player shows under the one its characters stated last, so an
 alt that has not logged in since a change does not bring the old one back.
+
+A player can also say which of its characters is its main, with the button
+next to it in the Me tab; the button again names none. The main goes out
+with the profile of whichever of its characters is played, and is the one
+its characters stated last. A player with no display name goes by its main,
+else by its character with the most kills. The Me tab lists every character
+of the player the board knows, with or without a kill in the period.
 
 A bar above the lists finds and narrows. Its search box takes any part of
 a name, whatever the case or the accents ("sor" finds "Søren"): on the
@@ -105,12 +143,42 @@ when, and that what came before is under "Last week" and "All time". Reset
 times are shown to the nearest minute, in the player's local time.
 
 The role (tank, healer, damage) is what each player says its character
-plays, chosen with three buttons in the Me tab and sent with the profile;
-the chosen one clicked again removes it. It is not read from the client:
+plays, chosen with three buttons on the character's line in the Me tab;
+the chosen one clicked again removes it. The role of the character played
+goes out with its profile. The role of another character of the same game
+account is said to the guild by the one played (it cannot speak while it
+is offline), taken when both characters stated the same BattleTag hash in
+their own profiles, and said again by the character itself at its next
+login. A character of the player on another game account keeps its own
+role: its buttons rest. The role is not read from the client:
 Forever's talents are one free tree and nothing in it names a role, so the
 addon does not guess one. `/kbs debug` prints what the client answers to
 the spec and role calls, to see whether it could be read one day. A member
 on a version before 1.0.1, or who chose nothing, has no role.
+
+Guild ranks to give. The character that holds the guild's first rank (the
+guild master's, whatever the guild calls it) has a button in the Options tab
+that opens a small dialog: the rank a main must hold at least once it runs
+the addon, the rank of alts (or none: alts are then not looked at), and the
+rank from which members see who falls short. The rule goes out in a guild
+message taken only from the roster's first rank, and only when newer than
+the one held; that character says it again at its login and to members who
+log in while it is online, so a member gets it the first time both are
+online. It is kept with the names of its ranks: when one is renamed or
+moved, the rule rests until it is sent again, rather than point at another
+rank. For the members allowed to see, an orange square before the rank
+marks a character (Characters tab) or a player (Players tab) with a rank to
+give, the tooltip says which rank it holds and which is expected, and on
+the Players tab the "Ranks to give" button keeps only those players, with
+or without a kill in the period. The right to see is read from the rank
+held each time it is asked: a demotion takes the marks, the button and its
+filter away, a promotion brings them back. With a main named, the main is
+held to the expected rank or above and the player's other characters to
+the rank of alts, no other; with none named nothing is guessed, and the
+player is marked only when none of its characters holds the expected rank.
+Only characters whose profile is held, which is what running the addon
+leaves, are looked at. None of this is secret: every member reads every
+rank in the game's own guild panel.
 
 The window's footer says where the sync with the guild stands: the seconds
 before the login announcement, the pages coming in, or how many journals are
@@ -120,15 +188,26 @@ A member who held nothing of the guild is told once in chat when the first
 journals arrive.
 
 A member who runs an older version than a guildmate is told once per
-session in the chat: "A new version (0.1.16) is available. Please update!".
+session in the chat: "A new version (0.1.16) is available. Please update!",
+with where to find help (`/kbs discord`). From 1.0.3 the board says it too:
+the first time it opens in the session, or at once when it is open, a
+small dialog names the version that is out and the one that runs, with how
+to update. "Later" closes it until the next session. "Skip this version"
+stops the reminders of that release, the chat line included, until the next
+one. "Never remind me" stops them for good, and the Options tab's box "Tell
+me when a new version is out" turns them back on, the release set aside
+included. The Options tab's version line names the newer release whatever
+was answered, as does `/kbs status`; the minimap button's tooltip only
+while the reminders hold.
 Hellos and profiles carry the version; a member who logs in with an older
 one gets the newer one back from a member who runs it, and the profiles it
 holds tell it at login when nobody newer is online. The login after an
 update says hello however recent the last one, and from 1.0.0 every client
 also tells the guild its version every 10 minutes (a presence message),
-for members who logged in after its hello. The footer's right end then
-reads "6 players have an outdated addon" when some guild members run an
-older version than the newest release around: hover the dotted number for
+for members who logged in after its hello. The footer's right end reads
+"6 players have an outdated addon" when some guild members run an older
+version than the newest release around, our own player never among them:
+hover the dotted number for
 their names, versions and when each was last heard from. A player counts
 once, judged by the character heard from last, so it drops off as soon as
 any of its characters runs the new version. Builds deployed by
@@ -164,10 +243,13 @@ SavedVariables, log in: the backfill runs on its own.
 Only hidden addon messages to your own guild (the guild channel and whispers
 to guild members), never chat text, and never anything outside the game:
 your kill and death records (time, the victim's or killer's name, class,
-race and level, the map position, your lifetime honorable kill count), the
+race and level, how the game rated that level against your character, the
+map position, your lifetime honorable kill count), the
 scoreboard rows of your battlegrounds, and your profile (character name,
 class, race, realm, level, the salted BattleTag hash, your display name, the
-role you chose for the character, the addon version), the version and the
+role you chose for the character, which of your characters is your main,
+the addon version), the role you set for another character of your account,
+the rule on ranks if you hold your guild's first rank, the version and the
 BattleTag hash again in the presence
 message every 10 minutes. There is no server; the guild's members hold the
 data.

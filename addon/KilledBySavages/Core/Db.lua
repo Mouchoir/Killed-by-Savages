@@ -23,6 +23,9 @@ local DEFAULT_SETTINGS = {
 	scale = 1,
 	window = {},
 	verbose = false,
+	updates = true,                       -- remind of a newer release: chat line, dialog on the board
+	-- updateSkip: the one release not to remind of, a version, set from the dialog
+	-- main: the GUID of the character its player calls its main, set in the Me tab
 }
 
 local function Fill(target, defaults)
@@ -60,6 +63,7 @@ function Db.Init()
 	end
 	db.authors = db.authors or {}         -- every journal held, own ones included
 	db.pending = db.pending or {}         -- HKs not matched yet (a /reload may interrupt)
+	db.rules = db.rules or {}             -- the rule on ranks of each guild, by guild name (see Ranks)
 	db.errors = db.errors or {}
 	db.counters = db.counters or {}
 	db.debug = db.debug or {}

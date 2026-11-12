@@ -3,7 +3,8 @@ local _, ns = ...
 --------------------------------------------------------------------------------
 -- Characters tab: one line per character, ranked. The bar above the list
 -- finds a character by its name or its player's, and keeps the classes,
--- the levels and the roles chosen.
+-- the levels and the roles chosen. For the members the guild lets see it,
+-- a mark before the rank says a character lacks the guild rank expected.
 --------------------------------------------------------------------------------
 
 local Theme = ns.Theme
@@ -26,6 +27,9 @@ ns.UI.EventLabel = EventLabel
 
 local function Tooltip(row, data)
 	if not Theme.TooltipStart(row, data.name) then return end
+	if data.rankIssue then
+		Theme.TooltipLine(ns.Ranks.Line(data.rankIssue), Theme.Color("warn"))
+	end
 	if data.provisional and data.provisional > 0 then
 		Theme.TooltipLine(L.TOOLTIP_UNCONFIRMED:format(data.provisional), Theme.Color("disabled"))
 	end
@@ -59,7 +63,7 @@ ns.UI.RegisterTab({
 		frame.filters.frame:SetPoint("TOPRIGHT", 0, 0)
 		-- 724 px of columns, as before the role had one: the name gave it room.
 		frame.view = ListView.New(frame, {
-			{ key = "rank", title = L.COL_RANK, width = 44, align = "RIGHT", muted = true },
+			{ key = "rank", title = L.COL_RANK, width = 44, align = "RIGHT", muted = true, mark = "rankMark" },
 			{ key = "name", title = L.COL_CHARACTER, width = 186, icon = "class", classColor = true, sort = "text" },
 			{ key = "level", title = L.COL_LEVEL, width = 46, align = "RIGHT", muted = true, sort = "number" },
 			{ key = "roleText", title = L.COL_ROLE, width = 58, muted = true, sort = "text", tip = L.COL_ROLE_TIP },
@@ -80,6 +84,9 @@ ns.UI.RegisterTab({
 		for _, row in ipairs(rows) do
 			row.player = players[row.playerKey or ("char:" .. row.guid)]
 			row.roleText = Filters.ROLE_TEXT[row.role] or ""
+			-- The guild rank it lacks, for the members allowed to see it.
+			row.rankIssue = ns.Ranks.Issue(row.guid)
+			row.rankMark = row.rankIssue ~= nil
 		end
 		frame.rows, frame.period = rows, period
 		frame.Fill()

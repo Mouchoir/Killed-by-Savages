@@ -365,6 +365,12 @@ function Stats.AuthorInfo(guid)
 		playerKey = profile and profile.playerKey or nil,
 		role = profile and profile.role or nil,
 		alias = profile and profile.alias or nil,
+		-- The player's main as this character states it: a tail, false for
+		-- none, nil when its version says nothing of it.
+		main = profile and profile.main,
+		tail = Util.Tail(guid),
+		rankIndex = member and member.rankIndex or nil,
+		rankName = member and member.rankName or nil,
 		-- When the character itself last stated its profile: a hello, or a
 		-- profile of its own. One relayed with a page states nothing.
 		statedAt = author and math.max(author.profileAt or 0, author.lastHello or 0) or 0,
@@ -391,15 +397,15 @@ local function SortRows(rows)
 end
 
 -- Every guild member whose journal, or whose scoreboards, say something
--- for the period, ranked.
-function Stats.Characters(period, bucket)
+-- for the period, ranked; with everyone, those with nothing to show too.
+function Stats.Characters(period, bucket, everyone)
 	local rows = {}
 	local known = KnownGuids()
 	for tail, member in pairs(Identity.roster.byTail) do
 		local guid = member.guid or ("Player-" .. tail)
 		if known[guid] then
 			local sum = Stats.Character(guid, period, bucket)
-			if sum.kills > 0 or sum.deaths > 0 then
+			if everyone or sum.kills > 0 or sum.deaths > 0 then
 				local info = Stats.AuthorInfo(guid)
 				sum.guid, sum.name, sum.class, sum.level, sum.role = guid, info.name, info.class, info.level, info.role
 				sum.playerKey, sum.me, sum.before = info.playerKey, guid == Identity.me.guid, info.before
@@ -422,10 +428,11 @@ local function StatedLater(a, b)
 end
 
 -- Characters grouped by Battle.net account: a player. Only characters still
--- in the guild count. The name is the alias the player chose, else the
--- character with the most kills ever.
-function Stats.Players(period, bucket)
-	local key = period .. ":" .. bucket
+-- in the guild count. The name is the alias the player chose, else that of
+-- its main: the character it named so, else the one with the most kills
+-- ever. With everyone, the players with nothing to show for the period too.
+function Stats.Players(period, bucket, everyone)
+	local key = period .. ":" .. bucket .. (everyone and ":everyone" or "")
 	if cache.players[key] then return cache.players[key] end
 	local groups = {}
 	local known = KnownGuids()
@@ -445,20 +452,36 @@ function Stats.Players(period, bucket)
 			group.kb = group.kb + sum.kb
 			group.deaths = group.deaths + sum.deaths
 			group.before = group.before + (info.before or 0)
-			group.characters[#group.characters + 1] = { guid = guid, name = info.name, class = info.class, kills = sum.kills, ever = ever.kills, deaths = sum.deaths }
+			group.characters[#group.characters + 1] = { guid = guid, tail = info.tail, name = info.name, class = info.class,
+				kills = sum.kills, ever = ever.kills, deaths = sum.deaths }
 			local word = { guid = guid, alias = info.alias, at = info.statedAt or 0 }
 			if not group.word or StatedLater(word, group.word) then group.word = word end
+			-- The main too is the last word of the player's characters, among
+			-- those whose version says one.
+			if info.main ~= nil and (not group.mainWord or word.at > group.mainWord.at
+				or (word.at == group.mainWord.at and guid < group.mainWord.guid)) then
+				group.mainWord = { guid = guid, at = word.at, main = info.main }
+			end
 			if guid == Identity.me.guid then group.me = true end
 		end
 	end
 	local rows = {}
 	for _, group in pairs(groups) do
-		if group.kills > 0 or group.deaths > 0 then
+		if everyone or group.kills > 0 or group.deaths > 0 then
 			table.sort(group.characters, function(a, b)
 				if a.ever ~= b.ever then return a.ever > b.ever end
 				return a.name < b.name
 			end)
-			local main = group.characters[1]
+			-- My own main is the one set here, whatever my profiles still say.
+			local mainTail = group.mainWord and group.mainWord.main or nil
+			if group.me then mainTail = Util.Tail(Identity.Main()) end
+			local main
+			for _, character in ipairs(group.characters) do
+				if mainTail and character.tail == mainTail then main = character end
+			end
+			group.mainDeclared = main ~= nil
+			group.mainWord = nil
+			main = main or group.characters[1]
 			-- My own name is the one set here, whatever the profiles of
 			-- my other characters still say.
 			if group.me then

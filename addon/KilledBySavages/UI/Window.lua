@@ -135,7 +135,8 @@ end
 
 -- Bottom right: "6 players have an outdated addon", the number underlined
 -- with dots, the footer's line ending before it. Hidden when everyone is
--- up to date.
+-- up to date. Our own player is never among them: when our own addon is the
+-- one behind, a dialog says so (below).
 local function RefreshOutdated()
 	local notice = frame.outdated
 	local data = ns.Sync.Outdated()
@@ -433,6 +434,84 @@ local function BuildShell()
 end
 
 --------------------------------------------------------------------------------
+-- Our own addon behind: a small dialog over the board
+--------------------------------------------------------------------------------
+
+-- When a guildmate runs a newer release than ours, the board says so the
+-- first time it opens in the session, or at once when it is open: which
+-- version is out, which one runs, how to update. "Later" closes it until
+-- the next session; the two other buttons stop the reminders for that
+-- release, or for good (the Options tab's box turns them back on). A child
+-- of the board: it moves, scales and hides with it, and one left unanswered
+-- is still there when the board opens again.
+local DIALOG_WIDTH, DIALOG_HEIGHT = 500, 152
+local updateShownFor              -- the release the dialog came up for, this session
+
+local function BuildUpdateDialog()
+	local dialog = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+	dialog:SetSize(DIALOG_WIDTH, DIALOG_HEIGHT)
+	dialog:SetPoint("CENTER", frame, "CENTER", 0, 40)
+	dialog:SetFrameLevel(frame:GetFrameLevel() + 60)
+	dialog:EnableMouse(true)
+	Theme.Panel(dialog, 14, 4, { 0.10, 0.075, 0.05, 0.98 }, Theme.COLORS.lit)
+	Theme.Parchment(dialog, 0.12)
+	local title = dialog:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	title:SetPoint("TOP", 0, -14)
+	title:SetTextColor(Theme.Color("gold"))
+	title:SetText(L.UPDATE_DIALOG_TITLE)
+	local text = dialog:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	text:SetPoint("TOPLEFT", 18, -42)
+	text:SetPoint("TOPRIGHT", -18, -42)
+	text:SetJustifyH("CENTER")
+	text:SetTextColor(Theme.Color("text"))
+	dialog.text = text
+	local how = dialog:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	how:SetPoint("TOPLEFT", text, "BOTTOMLEFT", 0, -8)
+	how:SetPoint("TOPRIGHT", text, "BOTTOMRIGHT", 0, -8)
+	how:SetJustifyH("CENTER")
+	how:SetTextColor(Theme.Color("muted"))
+	how:SetText(L.UPDATE_DIALOG_HOW)
+
+	-- Three buttons in a row, centred: 100 + 8 + 160 + 8 + 180 px.
+	local skip = Theme.DarkButton(dialog, L.UPDATE_SKIP, 160, 22)
+	skip:SetPoint("BOTTOM", dialog, "BOTTOM", -40, 14)
+	local later = Theme.DarkButton(dialog, L.UPDATE_LATER, 100, 22)
+	later:SetPoint("RIGHT", skip, "LEFT", -8, 0)
+	local never = Theme.DarkButton(dialog, L.UPDATE_NEVER, 180, 22)
+	never:SetPoint("LEFT", skip, "RIGHT", 8, 0)
+	later:SetScript("OnClick", function() dialog:Hide() end)
+	skip:SetScript("OnClick", function()
+		ns.Sync.SkipVersion(dialog.version)
+		dialog:Hide()
+	end)
+	never:SetScript("OnClick", function()
+		ns.Sync.SetReminders(false)
+		dialog:Hide()
+		ns.Print(L.UPDATE_NEVER_DONE)
+	end)
+	Theme.Tip(later, L.UPDATE_LATER, L.UPDATE_LATER_TIP)
+	Theme.Tip(skip, L.UPDATE_SKIP, function() return L.UPDATE_SKIP_TIP:format(tostring(dialog.version)) end)
+	Theme.Tip(never, L.UPDATE_NEVER, L.UPDATE_NEVER_TIP)
+	dialog.later, dialog.skip, dialog.never = later, skip, never
+	dialog:Hide()
+	return dialog
+end
+
+-- Once per session and release, and only while the player wants to hear
+-- of it.
+local function ShowUpdateDialog()
+	if not frame or not frame:IsShown() then return end
+	local newer = ns.Sync.Reminder()
+	if not newer or updateShownFor == newer then return end
+	updateShownFor = newer
+	if not frame.updateDialog then frame.updateDialog = BuildUpdateDialog() end
+	local dialog = frame.updateDialog
+	dialog.version = newer
+	dialog.text:SetText(L.UPDATE_DIALOG_TEXT:format(newer, tostring(ns.VERSION)))
+	dialog:Show()
+end
+
+--------------------------------------------------------------------------------
 -- State and refresh
 --------------------------------------------------------------------------------
 
@@ -478,6 +557,10 @@ function UI.Refresh()
 	if tabFrame and definition then
 		Util.Guard("tab-refresh:" .. state.tab, definition.Refresh, tabFrame, state.period, state.bucket)
 	end
+	-- The dialog about a newer release leaves when the player no longer
+	-- wants to hear of it: the Options tab's box, unticked while it is up.
+	local dialog = frame.updateDialog
+	if dialog and dialog:IsShown() and not ns.Sync.Reminder() then dialog:Hide() end
 end
 
 function UI.SelectTab(key)
@@ -524,6 +607,7 @@ function UI.Show()
 	frame:Show()
 	frame:Raise()
 	UI.SelectTab(state.tab)
+	Util.Guard("update-dialog", ShowUpdateDialog)
 end
 
 function UI.Hide()
@@ -585,3 +669,9 @@ ns.Hook("SettingsChanged", QueueRefresh)
 ns.Hook("SyncChanged", FooterNow)
 ns.Hook("PeerSeen", OutdatedNow)
 ns.Hook("PresenceChanged", OutdatedNow)
+-- A newer release heard of: the dialog comes up if the board is open, and
+-- the Options tab's version line follows.
+ns.Hook("NewerVersion", function()
+	ShowUpdateDialog()
+	QueueRefresh()
+end)

@@ -459,9 +459,23 @@ end
 
 local ROLES = { "T", "H", "D" }
 
+-- The role buttons of the character played, in the Me tab's list: the
+-- three last cells of its row, in the order of ROLES.
+local function RoleButton(tab, role)
+	local row = tab and FindRow(tab.view, function(data) return data.me end)
+	local buttons = row and row.cells or {}
+	for index, name in ipairs(ROLES) do
+		if name == role then
+			local cell = buttons[#buttons - #ROLES + index]
+			return cell and cell.button
+		end
+	end
+	return nil
+end
+
 local function RoleShown(tab)
 	for _, role in ipairs(ROLES) do
-		local button = tab and tab.roleButtons and tab.roleButtons[role]
+		local button = RoleButton(tab, role)
 		if button and button.selected then return role end
 	end
 	return nil
@@ -474,7 +488,7 @@ local function RestoreRole()
 	local now = RoleShown(tab)
 	if now == saved.role then return end
 	-- The chosen role clicked again removes it; another one replaces it.
-	Run(tab.roleButtons[saved.role or now])
+	Run(RoleButton(tab, saved.role or now))
 end
 
 -- The display name as it was, to the letter (none stays none).
@@ -665,7 +679,7 @@ local SCENES = {
 			end
 			if saved.role then order[#order + 1] = saved.role end
 			for _, role in ipairs(order) do
-				Click(tab.roleButtons[role])
+				Click(RoleButton(tab, role))
 				Wait(1)
 			end
 			Trace(("scene 3: role %s, was %s"):format(tostring(RoleShown(tab)), tostring(saved.role)))
@@ -690,9 +704,14 @@ local SCENES = {
 		tab = "me",
 		play = function()
 			local tab = TabFrame("me")
+			-- A row's buttons: my main first, then its name, then the roles.
 			local function UseButton(row)
+				local seen = 0
 				for _, cell in ipairs(row and row.cells or {}) do
-					if cell.button then return cell.button end
+					if cell.button then
+						seen = seen + 1
+						if seen == 2 then return cell.button end
+					end
 				end
 				return nil
 			end

@@ -53,13 +53,20 @@ their kills with the rest of the guild, right inside the game.
 - **Battlegrounds done right.** The game hides enemies during a match, so
   the final scoreboard is kept instead, and every guildmate on it is
   credited, with or without the addon.
-- **Kill feed.** Optional: every guild kill and death in your chat as "X
-  killed Y (2-1)", in a tab of its own or in your main chat.
-- **Your own corner.** Your characters, your numbers, your own hunting
-  board, and the name the board shows for you.
+- **Kill feed.** Optional: every guild kill and death in your chat, your
+  guildmate always first: "X (38) killed Y (41) (2-1)", "X (38) was killed
+  by Y (41) (2-2)". Enemy levels come in the colour the game gives them on
+  the target frame, with its skull for one too high to read. In a tab of
+  its own, made for you with one button, or in your main chat.
+- **Your own corner.** Your characters, the role each one plays and which
+  one is your main, your numbers, your own hunting board, and the name the
+  board shows for you.
+- **Guild ranks to give.** The guild master picks the rank a main needs
+  once it runs the addon, and the rank of alts. The ranks it chooses then
+  see, right on the board, who is still waiting for a promotion.
 - **Syncs by itself.** Kills land on everyone's board as they happen, and
   members who were offline catch up from whoever is online. The board even
-  tells you who still runs an old version.
+  tells you who still runs an old version, and when yours is one.
 
 ![The Me tab: your characters, the enemies you kill the most and the ones who kill you](screenshots/me-hunting-boards.png)
 
@@ -79,20 +86,24 @@ salted hash of their BattleTag: the tag itself is never kept or sent.
 Only hidden addon messages to your own guild, never chat text, never
 anything outside the game: your kill and death records, your battleground
 scoreboards, your profile (name, class, race, realm, level, the BattleTag
-hash, your display name, the addon version) and, every ten minutes, your
-addon version. There is no server.
+hash, your display name, the role and the main you chose, the addon
+version) and, every ten minutes, your addon version. A guild master's rule
+on ranks goes to its guild the same way. There is no server.
 
 ### Commands
 
 `/kbs` opens the board (so does the minimap button), `/kbs status` says
-where the addon stands, `/kbs options` opens its options, `/kbs debug`
-prints the sync state for a bug report.
+where the addon stands, `/kbs options` opens its options, `/kbs discord`
+gives the link to the addon's Discord, `/kbs preview` shows example lines of
+the kill feed, `/kbs debug` prints the sync state for a bug report.
 
 ![The characters ranking](screenshots/characters.png)
 
 Built for the guild Savages, made for any guild, on either faction. In
 English and French. Source, issues and the test harness:
 https://github.com/Mouchoir/Killed-by-Savages
+
+Discord (new versions, bug reports, ideas): https://discord.gg/wqYecPR8yC
 
 ---
 
@@ -108,5 +119,10 @@ et vos pires ennemis, jalons de guilde, fil des kills en option (dans un
 onglet dédié ou dans le chat principal) et un onglet rien que pour vous. En
 champ de bataille, le tableau de score final crédite chaque membre de la
 guilde présent, avec ou sans l'addon. Le tableau signale aussi qui n'a pas
-l'addon à jour. Aucun serveur, aucun site : les données circulent entre
-membres par messages d'addon cachés. Interface en français et en anglais.
+l'addon à jour, et vous prévient quand c'est le vôtre. Le maître de guilde
+peut indiquer le grade attendu d'un personnage principal et celui des
+rerolls : les grades qu'il choisit voient alors, sur le tableau, qui attend
+encore sa promotion. Aucun serveur, aucun
+site : les données circulent entre membres par messages d'addon cachés.
+Interface en français et en anglais. Discord (nouvelles versions, rapports
+de bug, idées) : https://discord.gg/wqYecPR8yC
