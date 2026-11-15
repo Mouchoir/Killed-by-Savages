@@ -819,6 +819,16 @@ function Mock.NewClient(spec)
 			local facts = factsOf(unit)
 			return facts and facts.level or 0
 		end
+		-- As on Forever: the level the target frame shows, -1 (the skull) for a
+		-- player too far above, whose UnitLevel still says the true level.
+		-- facts.effective when the test sets it, else the level itself.
+		env.UnitEffectiveLevel = function(unit)
+			if unit == "player" then return 60 end
+			local facts = factsOf(unit)
+			if not facts then return 0 end
+			if facts.effective ~= nil then return facts.effective end
+			return facts.level or 0
+		end
 		env.UnitFactionGroup = function(unit)
 			if unit == "player" then return "Alliance", "Alliance" end
 			local facts = factsOf(unit)

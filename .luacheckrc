@@ -27,7 +27,7 @@ read_globals = {
 	"IsInRaid", "IsInGroup", "GetNumGroupMembers", "GetRaidRosterInfo",
 
 	-- Units and players
-	"UnitGUID", "UnitName", "UnitFullName", "GetUnitName", "UnitClass", "UnitRace", "UnitLevel", "UnitFactionGroup",
+	"UnitGUID", "UnitName", "UnitFullName", "GetUnitName", "UnitClass", "UnitRace", "UnitLevel", "UnitEffectiveLevel", "UnitFactionGroup",
 	"UnitExists", "UnitIsPlayer", "UnitIsPVP", "UnitTokenFromGUID", "GetPlayerInfoByGUID",
 	"GetRealmName", "GetNormalizedRealmName", "BNGetInfo",
 

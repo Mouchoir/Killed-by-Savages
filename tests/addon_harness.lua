@@ -3484,7 +3484,9 @@ local function FeedLevels()
 	local kept = Last(A)
 	check("a kill records the victim's level and how the game rated it", kept.type == "K" and kept.vlevel == 33 and kept.vcon == "D",
 		tostring(kept.vlevel) .. " " .. tostring(kept.vcon))
-	victim.level, victim.con = -1, 4
+	-- As the game does it: the true level still in UnitLevel, -1 in the
+	-- effective level the target frame shows.
+	victim.level, victim.effective, victim.con = 42, -1, 4
 	A.fire("PARTY_KILL", A.guid, HORDE[2].guid)
 	A.fire("UNIT_DIED", HORDE[2].guid)
 	GainHK(A)
@@ -3492,7 +3494,7 @@ local function FeedLevels()
 	kept = Last(A)
 	check("a victim whose level the game hides is recorded as such, with no level", kept.type == "K" and kept.vlevel == nil
 		and kept.vcon == "S", tostring(kept.vlevel) .. " " .. tostring(kept.vcon))
-	victim.level, victim.con = 60, nil
+	victim.level, victim.effective, victim.con = 60, nil, nil
 	killer.level, killer.con = 48, 4
 	A.state.target = HORDE[1].guid
 	A.state.recap = { {
@@ -3509,7 +3511,7 @@ local function FeedLevels()
 	-- A killer far above the member: the game hides its level. Nothing is
 	-- written in its place, and the line shows the skull.
 	advance(12)
-	killer.level, killer.con = -1, 4
+	killer.level, killer.effective, killer.con = 47, -1, 4
 	A.state.recapReadyAt = Mock.Now()
 	A.fire("PLAYER_DEAD")
 	advance(6)
@@ -3521,7 +3523,7 @@ local function FeedLevels()
 		kept.type == "D" and kept.klevel == nil and kept.kcon == "S" and stored:sub(-3) == ";;S"
 		and line:find("Gruk Bonecrusher|r (|A:UI-HUD-UnitFrame-Target-HighLevelTarget_Icon:14:14|a) ", 1, true) ~= nil, stored .. " / " .. line)
 	A.state.target, A.state.recap = nil, nil
-	killer.level, killer.con = 60, nil
+	killer.level, killer.effective, killer.con = 60, nil, nil
 
 	line = Kill({ vcon = "S" })
 	check("with the client's art, a hidden level is the skull the target frame shows",
@@ -4443,14 +4445,14 @@ local function SeenLevels()
 	end
 	A.state.target = nil
 	advance(12)
-	killer.level, killer.con = -1, 4
+	killer.level, killer.effective, killer.con = 47, -1, 4
 	Plate()
 	advance(20)
 	local kept = Die()
 	check("a killer gone from sight when the recap is read keeps the level seen on its nameplate: hidden, the skull",
 		kept.type == "D" and kept.kname == "Gruk Bonecrusher" and kept.klevel == nil and kept.kcon == "S",
 		tostring(kept.klevel) .. " " .. tostring(kept.kcon))
-	killer.level, killer.con = 41, 3
+	killer.level, killer.effective, killer.con = 41, nil, 3
 	Plate()
 	advance(20)
 	kept = Die()

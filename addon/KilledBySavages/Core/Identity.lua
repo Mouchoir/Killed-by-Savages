@@ -308,6 +308,21 @@ function Identity.Con(token, level)
 	return nil
 end
 
+-- A unit's level as the target frame shows it. Forever's TargetFrame reads
+-- UnitEffectiveLevel and shows the skull when it is below 1; UnitLevel
+-- still gives the true level of a player far above the character (seen in
+-- game 2026-11-15: 42 and 47 in the feed of a level 32 member, skulls on
+-- screen), so it is never the one read. -1 for a level the game hides.
+local function LevelOf(unit)
+	local level = Fn(UnitEffectiveLevel) and Get(UnitEffectiveLevel, unit)
+	if type(level) ~= "number" then level = Get(UnitLevel, unit) end
+	-- 0 is a unit the client knows nothing of yet: no level, not a hidden one.
+	if type(level) ~= "number" or level == 0 then return nil end
+	if level < 0 then return -1 end
+	return level
+end
+Identity.LevelOf = LevelOf
+
 -- The level of an enemy player as last seen, and how the game rated it:
 -- read on its target, mouseover, focus or nameplate as they show. When the
 -- recap of a death is read the killer is often no unit any more (a rogue
@@ -327,8 +342,8 @@ local function Remember(unit)
 	local known = seen[guid]
 	if known and Util.Clock() - known.at < SEEN_AGAIN then return end
 	if me.enemyFaction == nil or Get(UnitFactionGroup, unit) ~= me.enemyFaction then return end
-	local level = Get(UnitLevel, unit)
-	if type(level) ~= "number" or level == 0 then return end
+	local level = LevelOf(unit)
+	if level == nil then return end
 	if not seen[guid] then
 		if seenCount >= SEEN_CAP then
 			local now = Util.Clock()
@@ -362,7 +377,7 @@ function Identity.PlayerFacts(guid)
 	local token = Get(UnitTokenFromGUID, guid)
 	if type(token) == "string" and token ~= SECRET then
 		facts.token = token
-		facts.level = Get(UnitLevel, token)
+		facts.level = LevelOf(token)
 		facts.con = Identity.Con(token, facts.level)
 		facts.faction = Get(UnitFactionGroup, token)
 		facts.guild = Get(GetGuildInfo, token)
