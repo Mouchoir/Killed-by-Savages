@@ -99,6 +99,7 @@ end)
 ns.On("PLAYER_GUILD_UPDATE", function(unit)
 	if unit ~= nil and unit ~= "player" then return end
 	ns.Identity.Refresh()
+	if not ns.Identity.InGuild() then ns.Identity.UpdateRoster(true) end
 	ns.Identity.RequestRoster()
 	ns.Fire("GuildChanged")
 end)
@@ -106,6 +107,13 @@ end)
 ns.On("GUILD_ROSTER_UPDATE", function()
 	ns.Identity.UpdateRoster()
 end)
+
+-- Enemy players' levels as they show, for a killer gone from sight when
+-- the recap of a death is read.
+ns.On("PLAYER_TARGET_CHANGED", function() ns.Identity.RememberUnit("target") end)
+ns.On("UPDATE_MOUSEOVER_UNIT", function() ns.Identity.RememberUnit("mouseover") end)
+ns.On("PLAYER_FOCUS_CHANGED", function() ns.Identity.RememberUnit("focus") end)
+ns.On("NAME_PLATE_UNIT_ADDED", function(unit) ns.Identity.RememberUnit(unit) end)
 
 ns.On("PLAYER_LEVEL_UP", function(level)
 	ns.Identity.me.level = Util.Safe(level)

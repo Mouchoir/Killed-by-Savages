@@ -3,7 +3,9 @@ local _, ns = ...
 --------------------------------------------------------------------------------
 -- Hunt tab: the enemies the guild kills the most, and those who kill us.
 -- One bar above both boards finds an enemy by its name and keeps the
--- classes chosen. No level there: a death does not say its killer's.
+-- classes chosen, among every enemy of the period: the boards hold them all,
+-- so that one far down the list is found too. No level there: a death does
+-- not say its killer's.
 --------------------------------------------------------------------------------
 
 local Theme = ns.Theme
@@ -14,10 +16,10 @@ local L = ns.L
 
 local function VictimRows(period, bucket, filter)
 	local rows = {}
-	for _, victim in ipairs(Stats.Victims(period, bucket, filter, 300)) do
+	for _, victim in ipairs(Stats.Victims(period, bucket, filter)) do
 		rows[#rows + 1] = {
-			name = victim.name or victim.tail, race = victim.race, class = ns.UI.ClassName(victim.class), classFile = victim.class,
-			count = victim.count, kb = victim.kb, by = victim.byCount, last = Theme.Time(victim.lastAt),
+			rank = #rows + 1, name = victim.name or victim.tail, race = victim.race, class = ns.UI.ClassName(victim.class), classFile = victim.class,
+			count = victim.count, kb = victim.kb, by = victim.byCount,
 		}
 	end
 	return rows
@@ -25,12 +27,12 @@ end
 
 local function KillerRows(period, bucket, filter)
 	local rows = {}
-	for _, killer in ipairs(Stats.Killers(period, bucket, filter, 300)) do
+	for _, killer in ipairs(Stats.Killers(period, bucket, filter)) do
 		rows[#rows + 1] = {
-			name = killer.name or killer.key, race = killer.race,
+			rank = #rows + 1, name = killer.name or killer.key, race = killer.race,
 			class = killer.kind == "e" and L.TOOLTIP_PET or ns.UI.ClassName(killer.class),
 			classFile = killer.kind ~= "e" and killer.class or nil,
-			count = killer.count, victims = killer.victimCount, last = Theme.Time(killer.lastAt),
+			count = killer.count, victims = killer.victimCount,
 		}
 	end
 	return rows

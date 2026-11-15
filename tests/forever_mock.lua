@@ -447,6 +447,7 @@ function Mock.NewClient(spec)
 		if unit == "player" then return st.guid end
 		if unit == "pet" then return st.pet end
 		if unit == "target" then return st.target end
+		if st.nameplates and st.nameplates[unit] then return st.nameplates[unit] end
 		local group = st.group
 		if group then
 			local index = tonumber(unit:match("^party(%d)$") or "")
@@ -858,7 +859,9 @@ function Mock.NewClient(spec)
 		end
 		env.GetGuildInfo = function(unit)
 			if unit == "player" then
-				if not st.guild then return nil end
+				-- A test seam: at a cold login the guild's name can come a
+				-- moment after the character.
+				if not st.guild or st.guildNameHidden then return nil end
 				return st.guild, RANKS[st.rank + 1], st.rank
 			end
 			local facts = factsOf(unit)

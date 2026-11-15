@@ -53,10 +53,18 @@ local function Color(name)
 end
 Theme.Color = Color
 
+-- Asked once per atlas: the client's art does not change during a session,
+-- and every icon of every row asks.
+local atlasKnown = {}
 function Theme.HasAtlas(name)
+	if name == nil then return false end
+	local known = atlasKnown[name]
+	if known ~= nil then return known end
 	if not (C_Texture and Util.Fn(C_Texture.GetAtlasInfo)) then return false end
 	local ok, info = pcall(C_Texture.GetAtlasInfo, name)
-	return ok and type(info) == "table"
+	known = ok and type(info) == "table"
+	atlasKnown[name] = known
+	return known
 end
 
 -- A frame from the first template the client knows, with the name of the

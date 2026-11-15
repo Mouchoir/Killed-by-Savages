@@ -188,7 +188,10 @@ ns.UI.RegisterTab({
 		-- interface reloads after, and how to make the tab by hand instead.
 		local create = ns.Filters.SmallButton(chat, L.OPTIONS_KILLFEED_CREATE:format(L.KILLFEED_TAB), 290)
 		create:SetPoint("TOPLEFT", tabHint, "BOTTOMLEFT", 0, -6)
-		create:SetScript("OnClick", function() ns.Killfeed.CreateTab() end)
+		create:SetScript("OnClick", function()
+			ns.Killfeed.CreateTab()
+			frame.UpdateFeedTab()
+		end)
 		Theme.Tip(create, L.OPTIONS_KILLFEED_CREATE:format(L.KILLFEED_TAB), L.OPTIONS_KILLFEED_CREATE_TIP:format(entry, L.KILLFEED_TAB))
 		create:Hide()
 		frame.createTab = create
@@ -432,6 +435,8 @@ local function BuildRanksDialog()
 		end
 	end
 	send:SetScript("OnClick", function()
+		-- No rank to expect is no rule to send: setting none would remove the guild's.
+		if dialog.expected:Value() == nil then return end
 		if ns.Ranks.Set(dialog.expected:Value(), dialog.reroll:Value() or nil, dialog.view:Value()) then
 			ns.Print(L.RANKS_SENT)
 		end

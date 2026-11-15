@@ -62,6 +62,12 @@ local GONE_WINDOW = 120           -- no whisper to a member the server called ab
 local NOT_FOUND_WINDOW = 15       -- a "not playing" answer this soon after our whisper is about it
 local PRESENCE_PERIOD = 600       -- between presence messages: who is here, on which version
 local PRESENCE_FIRST_MIN, PRESENCE_FIRST_MAX = 60, 600 -- the first one, spread so logins do not line up
+local MAX_SEQ = Records.MAX_SEQ   -- no journal is longer: a head above it is nobody's
+local MAX_COUNT = 100000000       -- nor a lifetime count higher
+local MAX_CHUNKS = 1000           -- a page never comes in more pieces
+local REJECT_RETRY = 86400        -- before a record that failed validation is asked for again
+local UNCLEAN = Records.UNCLEAN   -- what no honest client sends: the UI's escape character, control characters
+local UNCLEAN_PAGE = "[%z\1-\9\11-\31\127|]" -- the same in a page, whose lines end with a line feed
 
 local LibDeflate = LibStub and LibStub("LibDeflate", true)
 
@@ -89,6 +95,8 @@ local pagesIn = 0                 -- pages stored this session
 local lastPageAt
 local heldAtLogin                 -- other journals held when this session began
 local firstPagesSaid = false
+local guildOfSession              -- the guild all of the above is about
+local helloRound = 0              -- a login hello still waiting knows when another round replaced it
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -255,7 +263,15 @@ function Sync.Say(kind, text, priority)
 	return SendGuild(kind, text, priority)
 end
 
-local function SendWhisper(kind, text, target, priority, expires, onSent, onDrop)
+local SendWhisper
+
+-- A word to one member from another module (an announcement handed over).
+function Sync.Tell(kind, text, target, priority)
+	if not Identity.InGuild() then return false end
+	return SendWhisper(kind, text, target, priority)
+end
+
+function SendWhisper(kind, text, target, priority, expires, onSent, onDrop)
 	if #text > 255 then
 		ns.Count("sync.tooLong." .. kind)
 		return false
@@ -280,7 +296,8 @@ local function HeldEntries()
 	local entries = {}
 	for guid, author in pairs(ns.db.authors) do
 		local tail = Util.Tail(guid)
-		if tail and (author.head or 0) > 0 then
+		-- Only the journals of the guild played now are the guild's to hear of.
+		if tail and (author.head or 0) > 0 and Records.InGuild(guid) then
 			local own = ns.db.characters[guid]
 			entries[#entries + 1] = {
 				tail = tail, head = author.head, count = author.count or 0,
@@ -302,7 +319,7 @@ function Sync.SendHello(reason)
 	-- member that holds nothing says hello every time: it has no inventory
 	-- to send, and with no hello either it would log in without a word, so
 	-- that no holder would tell it what there is to ask for.
-	if reason ~= "recovery" and reason ~= "import" and char.helloVersion == ns.VERSION
+	if reason ~= "recovery" and reason ~= "import" and reason ~= "guild" and char.helloVersion == ns.VERSION
 		and Now() - (char.lastHello or 0) < HELLO_MIN_GAP and #HeldEntries() > 0 then
 		ns.Count("sync.helloSkipped")
 		ns.Fire("SyncChanged")
@@ -312,8 +329,12 @@ function Sync.SendHello(reason)
 	char.helloVersion = ns.VERSION
 	lastHeadAnnounced = OwnHead()
 	seenHead = {}
-	local lifeHK = char.lifeHK or 0
-	SendGuild("H", ("H^%d^%s^%s^%d^%d^%s"):format(PROTOCOL, Clean(ns.VERSION), me.tail, lastHeadAnnounced, lifeHK,
+	-- The lifetime count is said only when it is known. Members judge by it
+	-- which records they hold above our head are ours: said as 0 by a client
+	-- that could not read its counter yet, it would have them purge a whole
+	-- journal. Left empty, nothing is purged.
+	local lifeHK = type(char.lifeHK) == "number" and ("%d"):format(char.lifeHK) or ""
+	SendGuild("H", ("H^%d^%s^%s^%d^%s^%s"):format(PROTOCOL, Clean(ns.VERSION), me.tail, lastHeadAnnounced, lifeHK,
 		Clean(me.playerKey or "")))
 	local profile = Records.OwnProfile()
 	SendGuild("P", ("P^%s^%s"):format(me.tail, Records.EncodeProfile(profile)))
@@ -614,18 +635,32 @@ end
 -- What we lack, and asking for it
 --------------------------------------------------------------------------------
 
+-- A record that failed validation is not asked for again for a day: long
+-- enough not to fetch a page over and over, short enough to heal when the
+-- copy came from a holder gone wrong, or when an update reads it right.
+-- (Up to 1.0.3 the mark was `true` and never expired: such a seq gets one
+-- more try.)
+local function StillRejected(at, now)
+	return type(at) == "number" and now - at < REJECT_RETRY
+end
+
 -- The pages of an author where we miss seqs up to the head a holder has.
--- A packed page is complete by construction.
+-- A packed page is complete by construction, and so is a journal that
+-- holds as many records as its head says, which is the usual case: nothing
+-- is looked at then.
+local NOTHING = {}
 local function MissingPages(tail, holderHead)
 	local author = ns.db.authors[GuidOf(tail)]
-	local rejected = author and author.rejected or {}
+	if author and (author.head or 0) >= holderHead and (author.count or 0) >= (author.head or 0) then return NOTHING end
+	local rejected = author and author.rejected or NOTHING
+	local now = Now()
 	local pages = {}
 	for page = PageOf(holderHead), 1, -1 do
 		if not (author and author.pages and author.pages[page]) then
 			local from, to = PageRange(page)
 			if to > holderHead then to = holderHead end
 			for seq = from, to do
-				if not (author and author.log[seq]) and not rejected[seq] then
+				if not (author and author.log[seq]) and not StillRejected(rejected[seq], now) then
 					pages[#pages + 1] = page
 					break
 				end
@@ -720,6 +755,9 @@ function Sync.Schedule()
 	-- Our own journal first (crash recovery), then the most recently announced.
 	table.sort(tails, function(a, b)
 		local mine = Me().tail
+		-- Never "before itself": table.sort may compare an element with
+		-- itself, and an order that says so makes it fail.
+		if a == b then return false end
 		if a == mine then return true end
 		if b == mine then return false end
 		return (seenHead[a] and seenHead[a].at or 0) > (seenHead[b] and seenHead[b].at or 0)
@@ -727,7 +765,9 @@ function Sync.Schedule()
 	for _, tail in ipairs(tails) do
 		if HoldersInFlight() >= MAX_HOLDERS then return end
 		local failed = failedHolders(tail)
-		local holderName, info = BestHolder(tail, failed)
+		-- A journal known to be another guild's is not asked for.
+		local holderName, info
+		if not Records.Foreign(GuidOf(tail)) then holderName, info = BestHolder(tail, failed) end
 		if holderName and InFlightFor(Identity.Canon(holderName)) == 0 then
 			local pages = MissingPages(tail, info.head)
 			for _, page in ipairs(pages) do
@@ -864,6 +904,17 @@ end
 
 local function OnRequest(sender, tail, page)
 	if not Identity.Member(sender) then return end
+	if not (page >= 1 and page <= PageOf(MAX_SEQ)) then
+		ns.Count("sync.requestBadPage")
+		return
+	end
+	if Records.Foreign(GuidOf(tail)) then
+		-- Another guild's journal, held for a character of this account
+		-- there: not this guild's to have. Said as nothing held.
+		SendWhisper("B", ("B^%s^%d^0^0^"):format(tail, page), sender, 3)
+		ns.Count("sync.pageForeign")
+		return
+	end
 	if outPages >= OUT_PAGES_CAP then
 		-- Enough pages going out already: the requester asks again later
 		-- instead of waiting for a timeout and giving us up.
@@ -916,6 +967,7 @@ local function StorePage(sender, tail, page, text)
 	local fromAuthor = (Identity.Member(sender) or {}).tail == tail
 	local records, unknown = {}, {}
 	local profile
+	local from, to = PageRange(page)
 	for line in (text .. "\n"):gmatch("(.-)\n") do
 		if line:sub(1, 2) == "P1" then
 			profile = Records.DecodeProfile(line)
@@ -927,9 +979,10 @@ local function StorePage(sender, tail, page, text)
 					records[#records + 1] = { record = record, text = line }
 				else
 					ns.Count("sync.rejected." .. tostring(why))
-					if type(record.seq) == "number" then
+					-- Only a seq of the page asked for: the mark is saved.
+					if type(record.seq) == "number" and record.seq >= from and record.seq <= to then
 						author.rejected = author.rejected or {}
-						author.rejected[record.seq] = true
+						author.rejected[record.seq] = Now()
 					end
 				end
 			else
@@ -945,7 +998,6 @@ local function StorePage(sender, tail, page, text)
 		end
 	end
 	-- The chain is checked over the page plus our neighbours of it.
-	local from, to = PageRange(page)
 	local chain = {}
 	for _, item in ipairs(records) do chain[#chain + 1] = item.record end
 	local before = Records.Get(guid, from - 1)
@@ -976,7 +1028,10 @@ local function StorePage(sender, tail, page, text)
 			author.provisional[seq] = true
 		end
 		local stored = Records.Store(guid, seq, line, fromAuthor and "author" or "page")
-		if stored then added = added + 1 end
+		if stored then
+			added = added + 1
+			if author.rejected then author.rejected[seq] = nil end
+		end
 	end
 	for _, item in ipairs(records) do Keep(item.record.seq, item.text) end
 	for _, item in ipairs(unknown) do Keep(item.seq, item.text) end
@@ -994,7 +1049,7 @@ local function StorePage(sender, tail, page, text)
 		ns.Print(L.SYNC_FIRST_PAGES)
 	end
 	ns.Fire("SyncChanged")
-	return true
+	return true, added
 end
 
 local function OnPageChunk(sender, tail, page, index, total, data)
@@ -1020,6 +1075,16 @@ local function OnPageChunk(sender, tail, page, index, total, data)
 		return
 	end
 	local part = partial[key]
+	-- A page comes in a known number of pieces, each in its place: anything
+	-- else is not a page, and the holder is given up for a while.
+	if not (index >= 1 and index <= total and total <= MAX_CHUNKS) or (part and part.total ~= total) then
+		partial[key] = nil
+		requests[key] = nil
+		failedHolders(tail)[Identity.Canon(sender)] = Now()
+		ns.Count("sync.pageBadChunk")
+		Sync.Schedule()
+		return
+	end
 	if not part then
 		part = { total = total, got = 0, pieces = {}, at = Now() }
 		partial[key] = part
@@ -1033,11 +1098,24 @@ local function OnPageChunk(sender, tail, page, index, total, data)
 	partial[key] = nil
 	requests[key] = nil
 	local text = Decompress(table.concat(part.pieces))
+	if text and text:find(UNCLEAN_PAGE) then
+		text = text:gsub(UNCLEAN_PAGE, " ")
+		ns.Count("sync.in.unclean")
+	end
 	if not text then
 		ns.Count("sync.pageUndecodable")
 		failedHolders(tail)[Identity.Canon(sender)] = Now()
 	else
-		StorePage(sender, tail, page, text)
+		local stored, added = StorePage(sender, tail, page, text)
+		-- A page that brought nothing new: what we still miss of it, this
+		-- holder does not have either (its own copy has a hole there). Asked
+		-- again at once it would send the same page for ever, and keep every
+		-- other journal waiting behind it: it is left alone for a while, and
+		-- the other holders are asked.
+		if stored and added == 0 then
+			failedHolders(tail)[Identity.Canon(sender)] = Now()
+			ns.Count("sync.pageNothingNew")
+		end
 	end
 	Sync.Schedule()
 end
@@ -1049,7 +1127,14 @@ end
 local function ParseList(text)
 	local list = {}
 	for tail, head, count, lifeHK in text:gmatch("([%d%-%x]+)=(%d+)/(%d+)/?(%d*)") do
-		list[#list + 1] = { tail = tail, head = tonumber(head), count = tonumber(count), lifeHK = tonumber(lifeHK) }
+		head, count, lifeHK = tonumber(head), tonumber(count), tonumber(lifeHK)
+		-- A head no journal can have is left out: loops run up to it.
+		if head <= MAX_SEQ and count <= MAX_SEQ then
+			if lifeHK and lifeHK > MAX_COUNT then lifeHK = nil end
+			list[#list + 1] = { tail = tail, head = head, count = count, lifeHK = lifeHK }
+		else
+			ns.Count("sync.listBadHead")
+		end
 	end
 	return list
 end
@@ -1064,7 +1149,7 @@ local function ConfirmAuthor(tail, head, lifeHK)
 	if type(lifeHK) == "number" then author.confirmedLifeHK = lifeHK end
 	author.lastHello = Now()
 	if (author.head or 0) > head and not author.own then
-		local purged, kept = 0, 0
+		local purged, kept, marked = 0, 0, 0
 		for seq, text in pairs(author.log) do
 			if seq > head then
 				local record = Records.Decode(text)
@@ -1073,6 +1158,7 @@ local function ConfirmAuthor(tail, head, lifeHK)
 				if type(lifeHK) ~= "number" or (type(after) == "number" and after <= lifeHK) then
 					kept = kept + 1
 					author.provisional = author.provisional or {}
+					if not author.provisional[seq] then marked = marked + 1 end
 					author.provisional[seq] = true
 				else
 					author.log[seq] = nil
@@ -1081,18 +1167,17 @@ local function ConfirmAuthor(tail, head, lifeHK)
 			end
 		end
 		if purged > 0 then
-			local newHead, count = 0, 0
-			for seq in pairs(author.log) do
-				count = count + 1
-				if seq > newHead then newHead = seq end
-			end
-			author.head, author.count = newHead, count
+			-- From what is left, packed pages included.
+			Records.Recount(author)
 			ns.Count("sync.purged", purged)
 			ns.Fire("JournalChanged", GuidOf(tail))
 		end
 		if kept > 0 then ns.Count("sync.keptForAuthor", kept) end
-	else
+		-- The stats count the records not confirmed yet: told when that changed.
+		if marked > 0 and purged == 0 then ns.Fire("JournalChanged", GuidOf(tail)) end
+	elseif author.provisional then
 		author.provisional = nil
+		ns.Fire("JournalChanged", GuidOf(tail))
 	end
 end
 
@@ -1111,7 +1196,7 @@ local function Compare(sender, list, complete)
 		local myHead, myCount = author and author.head or 0, author and author.count or 0
 		-- When they hold more, Schedule asks them; when we do, we say so.
 		NoteHolder(entry.tail, canon, entry.head, entry.count)
-		if myHead > entry.head or (myHead == entry.head and myCount > entry.count) then
+		if (myHead > entry.head or (myHead == entry.head and myCount > entry.count)) and Records.InGuild(GuidOf(entry.tail)) then
 			ahead[#ahead + 1] = { tail = entry.tail, head = myHead, count = myCount }
 		end
 	end
@@ -1137,6 +1222,12 @@ local function OnHello(sender, fields)
 		ns.Count("sync.helloBadTail")
 		return
 	end
+	-- A head no journal can have, or no number at all: loops run up to it.
+	if not (head >= 0 and head <= MAX_SEQ and head % 1 == 0) then
+		ns.Count("sync.helloBadHead")
+		return
+	end
+	if lifeHK and not (lifeHK >= 0 and lifeHK <= MAX_COUNT) then lifeHK = nil end
 	local canon = Identity.Canon(sender)
 	local before = peers[canon]
 	local peer = { tail = tail, head = head, lifeHK = lifeHK, playerKey = fields[7], version = fields[3], at = Now(), name = sender }
@@ -1219,7 +1310,7 @@ local function OnRecord(sender, tail, seq, text)
 		return
 	end
 	local head = author.head or 0
-	local stored = Records.Store(guid, seq, text, "author")
+	local stored, how = Records.Store(guid, seq, text, "author")
 	author.confirmedHead = math.max(author.confirmedHead or 0, seq)
 	author.confirmedLifeHK = Records.LifeAfter(record) or author.confirmedLifeHK
 	if seq > head + 1 then
@@ -1229,7 +1320,8 @@ local function OnRecord(sender, tail, seq, text)
 	end
 	if stored then
 		ns.Count("sync.recordReceived")
-		ns.Fire("RecordStored", guid, seq, record, text)
+		if author.rejected then author.rejected[seq] = nil end
+		ns.Fire("RecordStored", guid, seq, record, text, how == "replaced")
 	end
 end
 
@@ -1279,6 +1371,14 @@ local function OnAddonMessage(prefix, text, channel, sender)
 	-- Our own guild messages sometimes come back to us on Forever.
 	if sender == Me().name or Identity.IsMe(sender) then return end
 	ns.Count("sync.in." .. kind)
+	-- Names, places and spells end up in the chat and in tooltips: an
+	-- escape code or a control character in them is taken out here, once,
+	-- as the text comes in. Page chunks are deflated bytes: their text is
+	-- looked at when the page is put together.
+	if kind ~= "B" and text:find(UNCLEAN) then
+		text = text:gsub(UNCLEAN, " ")
+		ns.Count("sync.in.unclean")
+	end
 	local senderCanon = Identity.Canon(sender)
 	if senderCanon then heard[senderCanon] = Now() end
 	if kind == "H" then
@@ -1319,6 +1419,9 @@ local function OnAddonMessage(prefix, text, channel, sender)
 		if version then OnPresence(sender, version, playerKey or "") end
 	elseif kind == "G" then
 		if ns.Ranks then ns.Ranks.OnRule(sender, text) end
+	elseif kind == "N" or kind == "L" or kind == "W" or kind == "T" then
+		-- The guild's announcements (see News).
+		if ns.News then ns.News.OnMessage(kind, sender, text) end
 	elseif kind == "C" then
 		local tail, role = text:match("^C%^([%d%-%x]+)%^(%a?)$")
 		if tail then OnCharacterRole(sender, tail, role) end
@@ -1340,7 +1443,18 @@ local function OnOwnRecord(guid, seq, text, _, source)
 	-- Imported history is not news: the hello that follows announces the
 	-- head and the guild takes the pages by whisper.
 	if source == "import" then return end
-	SendGuild("R", ("R^%s^%d^%s"):format(Me().tail, seq, text), 1)
+	local message = ("R^%s^%d^%s"):format(Me().tail, seq, text)
+	if #message > 255 then
+		-- A scoreboard with several guild teammates on it does not fit one
+		-- message. The guild is told our head instead, the way any holder
+		-- says it is ahead, and takes the page: versions before 1.0.4 dropped
+		-- the record, and it only came with the next one.
+		local author = ns.db.authors[guid]
+		SendList("A", { { tail = Me().tail, head = seq, count = author and author.count or seq } })
+		ns.Count("sync.recordTooLong")
+	else
+		SendGuild("R", message, 1)
+	end
 	-- A hello once in a while tells everyone our new head.
 	local char = Char()
 	if lastHeadAnnounced and seq - lastHeadAnnounced >= 20 and Now() - (char.lastHello or 0) >= HELLO_MIN_GAP then
@@ -1387,12 +1501,25 @@ local function EndRecovery(why)
 end
 
 local function OnCounterJump(fromHK, toHK)
-	if not Identity.InGuild() then return end
+	-- A crash is followed by a cold login, where the guild's name can come
+	-- a moment after the character: being in a guild at all is enough to
+	-- wait for it, and the hello goes out once the guild and its roster are
+	-- known. Written off at once, the jump would reuse the numbers of the
+	-- very records the guild still holds.
+	if not (Identity.InGuild() or Util.Get(IsInGuild) == true) then return end
 	ns.Detect.DeferJump()
 	Records.HoldOwn()
 	recovery = { from = fromHK, to = toHK }
 	ns.Count("sync.recoveryStart")
-	Util.After(5, "recovery-hello", function() Sync.SendHello("recovery") end)
+	local function Hello(attempt)
+		if not recovery then return end
+		if attempt <= HELLO_READY_TRIES and not (Identity.InGuild() and Identity.RosterKnown()) then
+			Util.After(HELLO_READY_WAIT, "recovery-hello", Hello, attempt + 1)
+			return
+		end
+		Sync.SendHello("recovery")
+	end
+	Util.After(5, "recovery-hello", Hello, 1)
 	Util.After(RECOVERY_WAIT, "recovery-end", function() EndRecovery("timeout") end)
 end
 
@@ -1470,15 +1597,15 @@ function Sync.Status()
 	return status
 end
 
-local function OnLogin()
-	InstallNotFoundFilter()
-	if C_ChatInfo and Util.Fn(C_ChatInfo.RegisterAddonMessagePrefix) then
-		Util.Call(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX)
-	end
-	heldAtLogin = HeldOthers()
-	-- The guild and its roster can take a few seconds to be known after
-	-- login, and the answers to the hello are taken from roster members only.
+-- The hello and the inventory of a login, once the guild and its roster
+-- are known: they can take a few seconds, and the answers to the hello are
+-- taken from roster members only. A later round (a guild joined during the
+-- session) replaces one still waiting.
+local function StartHello(reason)
+	helloRound = helloRound + 1
+	local round = helloRound
 	local function TryHello(attempt)
+		if round ~= helloRound then return end
 		if recovery then
 			helloDueAt = nil
 			return
@@ -1489,12 +1616,53 @@ local function OnLogin()
 			return
 		end
 		helloDueAt = nil
-		Sync.SendHello("login")
+		Sync.SendHello(reason)
 		Sync.SendInventory()
 	end
 	local delay = Jitter(HELLO_DELAY_MIN, HELLO_DELAY_MAX)
 	helloDueAt = Now() + delay
 	Util.After(delay, "hello", TryHello, 1)
+end
+
+-- What was heard, asked and queued belongs to one guild: all of it goes
+-- when the character is in another.
+local function ResetSession()
+	local waiting = queue
+	queue = {}
+	for _, item in ipairs(waiting) do
+		if item.onDrop then item.onDrop() end
+	end
+	peers, holders, seenHead, advancePending = {}, {}, {}, {}
+	requests, partial, failedBy, busyUntil = {}, {}, {}, {}
+	whispered, gone, heard, presence = {}, {}, {}, {}
+	inventorySent, lastHeadAnnounced = false, nil
+end
+
+-- The character joined, left or changed guild during the session. The new
+-- guild gets a hello and an inventory as at a login, whatever the age of
+-- the last hello: without them it would hear nothing before a /reload.
+local function OnGuildChanged()
+	local guild = Identity.InGuild() and Me().guild or nil
+	if guild == guildOfSession then return end
+	-- At login the guild's name can come a moment after the character: the
+	-- hello of the login is already waiting for it.
+	local stillLoggingIn = guildOfSession == nil and helloDueAt ~= nil
+	guildOfSession = guild
+	if stillLoggingIn then return end
+	ResetSession()
+	ns.Count("sync.guildChanged")
+	if guild then StartHello("guild") end
+	ns.Fire("SyncChanged")
+end
+
+local function OnLogin()
+	InstallNotFoundFilter()
+	if C_ChatInfo and Util.Fn(C_ChatInfo.RegisterAddonMessagePrefix) then
+		Util.Call(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX)
+	end
+	heldAtLogin = HeldOthers()
+	guildOfSession = Identity.InGuild() and Me().guild or nil
+	StartHello("login")
 	Util.Every(HELLO_PERIOD, "hello-period", function()
 		if OwnHead() ~= lastHeadAnnounced then Sync.SendHello("period") end
 	end)
@@ -1534,6 +1702,7 @@ end
 
 ns.On("CHAT_MSG_ADDON", OnAddonMessage)
 ns.Hook("Login", OnLogin)
+ns.Hook("GuildChanged", OnGuildChanged)
 ns.Hook("AliasChanged", OnProfileEdited)
 ns.Hook("RoleChanged", OnProfileEdited)
 ns.Hook("MainChanged", OnProfileEdited)
@@ -1571,6 +1740,6 @@ end)
 function Sync.State()
 	return {
 		queue = queue, peers = peers, holders = holders, requests = requests, partial = partial, recovery = recovery,
-		advancePending = advancePending, seenHead = seenHead, outPages = outPages,
+		advancePending = advancePending, seenHead = seenHead, outPages = outPages, inventory = HeldEntries(),
 	}
 end

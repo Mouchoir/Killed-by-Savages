@@ -23,7 +23,9 @@ it was written (see `probe/`):
   the game. A few seconds after each one the addon names the victim: a
   killing blow by you, your pet or your group (`PARTY_KILL`), or else the enemy
   player who died next to you at that moment (`UNIT_DIED`). Killing blows and
-  assists are shown apart.
+  assists are shown apart. Honorable kills that come within two seconds of
+  each other are named together: as many enemy deaths as kills name them
+  all, more deaths than kills name none.
 - **Deaths** come from the death recap, which names the killer (player or pet)
   and the spell. Deaths to creatures are not recorded. The client fires
   PLAYER_DEAD twice at times: within a few seconds it is one death.
@@ -33,12 +35,23 @@ it was written (see `probe/`):
   guild teammate on the board, credited with or without the addon. The
   "enemies killed" of a battleground are the guild's killing blows on that
   board or, when higher, the HKs of the member who took part in the most
-  deaths: a floor, since members' HKs overlap when they fight together.
+  deaths: a floor, since members' HKs overlap when they fight together. A
+  match left with no scoreboard (left early, or by a logout or a
+  disconnection inside it) is closed with what the journal itself holds:
+  the kills and the deaths written, no killing blow. When a teammate's
+  scoreboard of that match has your row, that row stands and the match
+  counts once.
 - **The guild total** counts each enemy death once, whoever took part.
 - **Players** are the characters of one Battle.net account that are still in
   the guild, grouped by a salted hash of the BattleTag; the tag itself is
   never kept or sent. A character that leaves the guild drops out of its
   player's total; the guild keeps what it did.
+- **One guild at a time**: the board shows the guild of the character you
+  are playing. The saved data is the account's, so it can hold the journals
+  of several guilds: a character of yours in another guild is not listed
+  with your others here, its kills count for its own guild, and its journal
+  is not handed to this one. A journal belongs to the guild its character
+  was last seen in.
 - Periods are weeks aligned on the server's weekly reset, plus all time.
 
 Each character keeps an append-only journal of its records, chained by the
@@ -213,6 +226,35 @@ once, judged by the character heard from last, so it drops off as soon as
 any of its characters runs the new version. Builds deployed by
 `scripts\dev.ps1` say `X.Y.Z-dev` and are never announced.
 
+## Announcements
+
+The **News** tab holds the guild's announcements: a raid night, an event,
+anything with a date. An addon reads nothing outside the game, so an
+announcement made on Discord gets here when a member allowed to publish
+writes it in the board: a title, the day and the time of the event, a few
+lines (600 bytes at most), the link of the Discord message, and whom it is
+for. The link shows in a box to copy it from; an addon cannot open it.
+
+- **Whom it is for** is said with what the addon knows of a character: its
+  guild rank, its class, the role its player chose in the Me tab, a level
+  from which it applies. Nothing chosen is the whole guild. A member it is
+  not for neither sees it nor hears of it; a member who chose no role is
+  told of an announcement for a role, rather than miss it.
+- **Being told**: while the event is still to come and the announcement
+  has not been looked at, one line in the chat, a count on the tab, and a
+  minimap button that goes red and dark in turn. The board opens on the
+  tab. Looking at the announcement once ends all of it, and so does the
+  event passing, looked at or not. A correction is to look at again. The
+  box under the list turns the telling off for good; the announcements
+  stay on the tab.
+- **Who may publish** is a rule of the guild's first rank, set on the tab:
+  every rank from the first down to the one it names. Until it says
+  otherwise, the two first ranks. Those ranks also correct and remove any
+  announcement, and see them all, whoever they are for.
+- **How it gets around**: said once on the guild channel when published,
+  then handed by whoever holds it to a member who logs in later, the way
+  the journals are. An event is kept two weeks after its date.
+
 ## Import from the probe
 
 A character that ran the probe (below) before installing the addon does not
@@ -249,10 +291,33 @@ scoreboard rows of your battlegrounds, and your profile (character name,
 class, race, realm, level, the salted BattleTag hash, your display name, the
 role you chose for the character, which of your characters is your main,
 the addon version), the role you set for another character of your account,
-the rule on ranks if you hold your guild's first rank, the version and the
+the rule on ranks if you hold your guild's first rank, the announcements
+you write and those of your guild you hold (title, date, text, link, whom
+they are for), with the rule on who may publish, the version and the
 BattleTag hash again in the presence
 message every 10 minutes. There is no server; the guild's members hold the
 data.
+
+## What the board takes on trust
+
+There is no server to check anything: a journal is its author's word. What
+each client checks of the others' is that a record is well formed and
+within bounds (a record number below a million, counts and levels in their
+range, no time in the future), that the lifetime count runs on from one
+record to the next, that a live record comes from its author, and that
+names, places and spells carry no escape code or control character, which
+are taken out as the text comes in. What it cannot check is that a kill
+happened: a member who edits its own saved file, or runs a modified client,
+can write itself a journal that holds together, or scoreboard lines that
+credit teammates. The board is a guild's own tally among people who play
+together, not a ranking to compete on across guilds.
+
+The announcements are held the same way. A copy handed on by a third
+member cannot be told from its author's own, so what is checked is that
+its fields are within bounds, that its text carries no escape code, that
+its link is a web address, and that the member named as its writer holds
+a rank that may publish in the roster at the time it is shown. A modified
+client can write one in an officer's name, or a rule on who may publish.
 
 ## Install
 

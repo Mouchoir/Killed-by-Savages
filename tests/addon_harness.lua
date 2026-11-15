@@ -246,6 +246,7 @@ GainHK(A)
 advance(5)
 check("a death 4 s before the HK is not its victim", Last(A).how == "unk")
 
+
 -- A kill by someone outside the group is not ours even with an HK nearby.
 before = #Journal(A)
 A.fire("PARTY_KILL", "Player-1234-0000FFFF", HORDE[6].guid)
@@ -833,7 +834,8 @@ section("Compaction: old pages packed, still served and counted")
 local synthGuid, synthTail = "Player-1234-00000AAA", "1234-00000AAA"
 local old = Mock.Server() - 3 * 7 * 24 * 3600
 for seq = 1, 450 do
-	local line = A.ns.Records.Encode({ type = "K", seq = seq, t = old + seq, bucket = "w", how = "unk", lifeHK = 1000 + seq })
+	local line = A.ns.Records.Encode({ type = "K", seq = seq, t = old + seq, bucket = "w", how = "unk", lifeHK = 1000 + seq,
+		guild = "Savages" })
 	A.ns.Records.Store(synthGuid, seq, line, "page")
 end
 Stats.Invalidate()
@@ -2889,10 +2891,16 @@ local function SearchAndFilters()
 	-- The role in the profile: one more field at the end, where versions
 	-- before 1.0.1 never look.
 	local sample = { name = "Aldric Stormhand", class = "HUNTER", race = "Human", realm = "Ashbringer", playerKey = "a1bf6c73",
-		alias = "Aldric", level = 60, baselineHK = 500, lifeHK = 512, version = "1.0.1", role = "H" }
+		alias = "Aldric", level = 60, baselineHK = 500, lifeHK = 512, version = "1.0.1", role = "H", main = false }
 	local line = ns.Records.EncodeProfile(sample)
 	check("a profile carries the role, then the player's main, a dash when it names none",
 		line == "P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.1;H;-", line)
+	-- A profile from a version that says nothing of a main, passed on by a
+	-- holder: it must not come out saying "no main".
+	sample.main = nil
+	local silent = ns.Records.EncodeProfile(sample)
+	check("a profile that says nothing of a main still says nothing once passed on", silent:sub(-3) == ";H;"
+		and ns.Records.DecodeProfile(silent).main == nil, silent)
 	check("the main reads back as a tail, as none, or as unknown from a version that says nothing of it",
 		ns.Records.DecodeProfile(line).main == false
 		and ns.Records.DecodeProfile("P1;Aldric Stormhand;HUNTER;Human;Ashbringer;a1bf6c73;Aldric;60;500;512;1.0.3;H;1234-0000AB12").main == "1234-0000AB12"
@@ -4405,6 +4413,1394 @@ end
 SyncFixes()
 
 --------------------------------------------------------------------------------
+section("A killer's level seen a moment before")
+--------------------------------------------------------------------------------
+
+-- When the recap of a death is read the killer is often no unit any more (a
+-- rogue back in stealth): its level as seen on its nameplate a moment
+-- before. Run last, since it lets five minutes pass.
+local function SeenLevels()
+	if not A.online then
+		A.login()
+		advance(130)
+	end
+	local killer = Mock.players[HORDE[1].guid]
+	local function Die()
+		A.state.recap = { {
+			sourceName = "Gruk Bonecrusher", sourceGUID = HORDE[1].guid, sourceFlags = 0x548, destName = "Aldric Stormhand",
+			destGUID = A.guid, spellName = "Attaque pernicieuse", spellId = 1, event = "SPELL_DAMAGE",
+		} }
+		A.state.recapReadyAt = Mock.Now()
+		A.fire("PLAYER_DEAD")
+		advance(6)
+		A.state.recap = nil
+		return Last(A)
+	end
+	local function Plate()
+		A.state.nameplates = { nameplate4 = HORDE[1].guid }
+		A.fire("NAME_PLATE_UNIT_ADDED", "nameplate4")
+		A.state.nameplates = nil
+	end
+	A.state.target = nil
+	advance(12)
+	killer.level, killer.con = -1, 4
+	Plate()
+	advance(20)
+	local kept = Die()
+	check("a killer gone from sight when the recap is read keeps the level seen on its nameplate: hidden, the skull",
+		kept.type == "D" and kept.kname == "Gruk Bonecrusher" and kept.klevel == nil and kept.kcon == "S",
+		tostring(kept.klevel) .. " " .. tostring(kept.kcon))
+	killer.level, killer.con = 41, 3
+	Plate()
+	advance(20)
+	kept = Die()
+	check("and a level it could read, with its rating", kept.type == "D" and kept.klevel == 41 and kept.kcon == "D",
+		tostring(kept.klevel) .. " " .. tostring(kept.kcon))
+	Plate()
+	advance(310)
+	kept = Die()
+	check("seen more than five minutes before, nothing is used", kept.type == "D" and kept.klevel == nil and kept.kcon == nil,
+		tostring(kept.klevel) .. " " .. tostring(kept.kcon))
+	A.state.target = HORDE[1].guid
+	A.fire("PLAYER_TARGET_CHANGED")
+	A.state.target = nil
+	advance(12)
+	kept = Die()
+	check("a target seen counts too", kept.type == "D" and kept.klevel == 41, tostring(kept.klevel))
+	local friend = Mock.players[B.guid]
+	A.state.nameplates = { nameplate5 = B.guid }
+	A.fire("NAME_PLATE_UNIT_ADDED", "nameplate5")
+	A.state.nameplates = nil
+	check("a player of our own faction is not kept", friend ~= nil and A.ns.Identity.PlayerFacts(B.guid).levelSeen == nil)
+	killer.level, killer.con = 60, nil
+end
+SeenLevels()
+
+--------------------------------------------------------------------------------
+section("Bounds, clean text and upkeep of 1.0.4")
+--------------------------------------------------------------------------------
+
+-- What 1.0.4 hardens and speeds up: a number or a text another client
+-- sends is bounded and made plain, a battleground match and a counter jump
+-- survive a /reload, a guild joined during the session is greeted, old
+-- pages are packed one at a time, and the stats count by week. Played in a
+-- guild of its own, whose members hear nobody else.
+local function Upkeep()
+	local guild = "Granite Oath"
+	local U = NewClient({ name = "Ulric Fenwater", guid = Guid(61), class = "WARRIOR", guild = guild, lifetime = 300, rank = 0 })
+	local V = NewClient({ name = "Vesna Holloway", guid = Guid(62), class = "MAGE", guild = guild, lifetime = 50, rank = 3 })
+	local Jo = NewClient({ name = "Jorun Eastmere", guid = Guid(63), class = "ROGUE", lifetime = 20, rank = 4 })
+	-- A member with no client: what it "says" is put into Ulric's ears.
+	local ghost = Guid(64)
+	Mock.AddPlayer(ghost, { name = "Wystan Corbel", class = "PRIEST", race = "Human", faction = "Alliance", guild = guild, lifetime = 10 })
+	local roster = Mock.GuildRoster()
+	roster[#roster + 1] = { guid = U.guid, rank = 0 }
+	roster[#roster + 1] = { guid = V.guid, rank = 3 }
+	roster[#roster + 1] = { guid = ghost, rank = 4 }
+	Mock.SetGuildRoster(roster)
+	local Tail = A.ns.Util.Tail
+	local vTail, gTail = Tail(V.guid), Tail(ghost)
+	-- A saved journal whose head no journal can have.
+	local impossible = Guid(70)
+	Jo.saved = { authors = { [impossible] = { head = 2 ^ 40, count = 2, missing = {}, pages = {}, log = {
+		[1] = ("K1;1;%d;w;unk;;;;;;;;;;1"):format(Mock.Server() - 2000), [2] = ("K1;2;%d;w;unk;;;;;;;;;;2"):format(Mock.Server() - 1000),
+	} } } }
+	U.login()
+	V.login()
+	Jo.login()
+	advance(40)
+	local R = U.ns.Records
+	local today = Mock.Server()
+	local function Heard(message, channel, sender)
+		U.fire("CHAT_MSG_ADDON", "KBS", message, channel or "GUILD", sender or "Wystan Corbel")
+	end
+	local function Asked(since)
+		local n = 0
+		for index = since + 1, #network.sent do
+			local sent = network.sent[index]
+			if sent.from == U.name and sent.channel == "WHISPER" and sent.target == V.name and sent.text:sub(1, 1) == "Q" then n = n + 1 end
+		end
+		return n
+	end
+	local function Count(list)
+		local n = 0
+		for _ in pairs(list or {}) do n = n + 1 end
+		return n
+	end
+
+	-- Numbers.
+	local okTop = R.Validate({ type = "K", seq = R.MAX_SEQ, t = today, bucket = "w", how = "unk", lifeHK = 1 }, today)
+	local okOver, why = R.Validate({ type = "K", seq = R.MAX_SEQ + 1, t = today, bucket = "w", how = "unk", lifeHK = 1 }, today)
+	check("a record's number is bounded: the highest is taken, one more is not", okTop == true and okOver == false and why == "seq",
+		tostring(why))
+	local refused = U.counter("sync.rejected.seq")
+	Heard(("R^%s^1099511627776^K1;1099511627776;%d;w;unk;;;;;;;;;;11"):format(gTail, today))
+	local gAuthor = U.db().authors[ghost]
+	check("a live record numbered beyond any journal is refused, and the journal's head stays", U.counter("sync.rejected.seq") == refused + 1
+		and (gAuthor == nil or (gAuthor.head or 0) == 0), gAuthor and gAuthor.head)
+	local badHead = U.counter("sync.helloBadHead")
+	Heard(("H^1^1.0.4^%s^1099511627776^10^key"):format(gTail))
+	local holder = (U.ns.Sync.State().holders[gTail] or {})["wystan corbel"]
+	check("a hello that announces such a head is not heard", U.counter("sync.helloBadHead") == badHead + 1
+		and (holder == nil or holder.head <= R.MAX_SEQ), holder and holder.head)
+	local badList = U.counter("sync.listBadHead")
+	Heard("I^1234-00000AB1=1099511627776/5,1234-00000AB2=0/0")
+	local holders = U.ns.Sync.State().holders
+	check("an inventory line with such a head is left out, the others are heard", U.counter("sync.listBadHead") == badList + 1
+		and holders["1234-00000AB1"] == nil and holders["1234-00000AB2"] ~= nil)
+	local repaired = Jo.db().authors[impossible]
+	check("a saved journal whose head no journal can have gets the head of what it holds", repaired.head == 2 and repaired.count == 2
+		and Jo.counter("records.headRepaired") == 1, repaired.head)
+	local sparse = Guid(71)
+	local function Line(seq) return ("K1;%d;%d;w;unk;;;;;;;;;;%d"):format(seq, today, seq) end
+	U.db().authors[sparse] = { head = 900000, count = 3, missing = {}, pages = {}, log = { [5] = Line(5), [17] = Line(17), [900000] = Line(900000) } }
+	local visited, walks = {}, U.counter("records.walkedSparse")
+	R.Each(sparse, function(_, _, seq) visited[#visited + 1] = seq end)
+	check("a journal with far more room than records is walked by what it holds, in order", table.concat(visited, ",") == "5,17,900000"
+		and U.counter("records.walkedSparse") == walks + 1, table.concat(visited, ","))
+	U.db().authors[sparse] = nil
+	check("no number read from a record is a NaN or an infinity", R.Decode("K1;8;inf;w;unk;;;;;;;;;;3").t == nil
+		and R.Decode("K1;nan;1794009143;w;unk;;;;;;;;;;3").seq == nil
+		and R.Decode("D1;3;1794009577;w;6938-00AA00BB;Vex;;;p;;;;;-inf;").lifeHK == nil)
+	local Get = U.ns.Util.Get
+	local threeA, threeB, threeC = Get(function() return 1, "two", true end)
+	check("a call's values come back as many as they are", select("#", Get(function() end)) == 0 and select("#", Get(function() return nil end)) == 1
+		and select("#", Get(function() return 1, 2 end)) == 2 and Get(function() return "one" end) == "one"
+		and threeA == 1 and threeB == "two" and threeC == true)
+
+	-- Text.
+	local unclean = U.counter("sync.in.unclean")
+	Heard(("R^%s^1^K1;1;%d;w;kb;6938-00ABCDEF;|cffff0000Red|r\nName;WARRIOR;Orc;30;1424;0.4;0.5;Granite Oath;11;;F"):format(gTail, today))
+	local stored = U.db().authors[ghost] and U.db().authors[ghost].log[1] or ""
+	local read = R.Decode(stored)
+	check("a live record's escape codes and control characters are taken out before it is kept", U.counter("sync.in.unclean") == unclean + 1
+		and stored ~= "" and stored:find("[|%c]") == nil and read ~= nil and read.vname == " cffff0000Red r Name", stored)
+	check("a record kept before that, read now, comes out plain too",
+		R.Decode("K1;9;1794009143;w;kb;6938-00ABCDEF;Na|me;WARRIOR;Orc;16;52;0.4;0.6;Savages;12;").vname == "Na me"
+		and R.DecodeProfile("P1;Na|me;MAGE;Human;Realm;key;Ali|as;30;0;5;1.0.4;T;-").alias == "Ali as"
+		and R.DecodeProfile("P1;Name;MA|GE;Human;Realm;key;;30;0;5;1.0.4;T;-").class == "MA GE")
+	local cut = R.Decode("K1;9;1794009144;w;kb;6938-00ABCDEF;" .. ("é"):rep(50) .. ";WARRIOR;Orc;16;52;0.4;0.6;Savages;12;").vname
+	check("a name longer than any name is cut, never in the middle of a character", #cut == 64 and cut == ("é"):rep(32), #cut)
+
+	-- A page: Vesna's journal, with a record that carries an escape code and
+	-- one that fails validation, both missing from Ulric's copy.
+	for _ = 1, 3 do
+		V.state.lifetime = V.state.lifetime + 1
+		V.ns.Records.AppendOwn({ type = "K", t = Mock.Server(), bucket = "w", how = "unk", lifeHK = V.state.lifetime })
+	end
+	local live = Mock.advanceUntil(function() return Held(U, V) == 3 end, 60)
+	local vLog = V.db().authors[V.guid].log
+	vLog[2] = ("K1;2;%d;w;kb;6938-00ABCDEF;Pi|pe;WARRIOR;Orc;30;1424;0.4;0.5;Granite Oath;%d;;"):format(today, V.state.lifetime - 1)
+	vLog[3] = ("K1;3;%d;z;unk;;;;;;;;;;%d"):format(today, V.state.lifetime)
+	local copy = U.db().authors[V.guid]
+	copy.log[2], copy.log[3], copy.count = nil, nil, 1
+	local function Announce()
+		U.ns.Sync.State().holders[vTail] = { ["vesna holloway"] = { head = 3, count = 3, at = Mock.Server() } }
+		U.ns.Sync.Schedule()
+	end
+	Announce()
+	local came = Mock.advanceUntil(function() return copy.log[2] ~= nil end, 120)
+	local got = copy.log[2] or ""
+	check("a page's escape codes are taken out too", live and came and got:find("|", 1, true) == nil and R.Decode(got) ~= nil
+		and R.Decode(got).vname == "Pi pe", got)
+	local setAside = copy.rejected and copy.rejected[3]
+	check("a record of the page that fails validation is set aside, with the time", type(setAside) == "number" and copy.log[3] == nil,
+		tostring(setAside))
+	advance(10)
+	local since = #network.sent
+	Announce()
+	advance(30)
+	check("it is not asked for again right away", Asked(since) == 0, Asked(since))
+	copy.rejected[3] = Mock.Server() - 86401
+	since = #network.sent
+	Announce()
+	advance(5)
+	local dayLater = Asked(since)
+	-- That page brought nothing new, so its holder is left alone for five
+	-- minutes: the next try comes after them.
+	advance(310)
+	copy.rejected[3] = true
+	since = #network.sent
+	Announce()
+	advance(5)
+	check("a day later it is, and so is one set aside by a version that kept no time", dayLater >= 1 and Asked(since) >= 1,
+		dayLater .. " / " .. Asked(since))
+	advance(25)
+	local inFlight = U.ns.Sync.State()
+	inFlight.requests[vTail .. ":9"] = { tail = vTail, page = 9, holder = V.name, sentAt = Mock.Server(), deadline = Mock.Server() + 45 }
+	local badChunk = U.counter("sync.pageBadChunk")
+	Heard(("B^%s^9^5^2^zzzz"):format(vTail), "WHISPER", V.name)
+	check("a page chunk out of its place drops the page", U.counter("sync.pageBadChunk") == badChunk + 1
+		and U.ns.Sync.State().requests[vTail .. ":9"] == nil)
+	check("a journal's head and count are found again from what it holds, packed pages included", (function()
+		local head, held = A.ns.Records.Recount(A.db().authors[synthGuid])
+		return head == 450 and held == 450
+	end)())
+
+	-- A /reload in the middle of a battleground match: the match goes on
+	-- with the HKs it already wrote as kills.
+	EnterBG(U)
+	U.state.lifetime = U.state.lifetime + 2
+	U.fire("PLAYER_PVP_KILLS_CHANGED", "player")
+	advance(5)
+	U.logout()
+	U.login()
+	advance(5)
+	U.state.lifetime = U.state.lifetime + 1
+	U.fire("PLAYER_PVP_KILLS_CHANGED", "player")
+	advance(5)
+	U.state.score = {
+		{ name = "Ulric Fenwater", guid = U.guid, kb = 1, hk = 3, deaths = 0, honor = 90, faction = 1, class = "WARRIOR", race = "Humain" },
+	}
+	U.state.secretScore = false
+	U.fire("PVP_MATCH_COMPLETE", 1, 600)
+	advance(8)
+	local board = Last(U)
+	check("a /reload during a match keeps the kills it already wrote: the match adds none, and the chain holds", board.type == "M"
+		and board.hk == 3 and board.live == 3 and U.ns.Records.Gain(board) == 0 and U.ns.Records.CheckChain(Journal(U)) == true
+		and U.counter("detect.bgResumed") == 1, ("%s hk %s live %s"):format(board.type, tostring(board.hk), tostring(board.live)))
+	LeaveBG(U)
+	advance(20)
+	check("the match is forgotten once left", U.db().characters[U.guid].match == nil)
+
+	-- Battleground records no match record closed. First a run that may be
+	-- of the match we are still in: it waits, and leaving with no scoreboard
+	-- keeps the counter's delta and the deaths the journal wrote.
+	local function Dies(client)
+		client.state.recap = { { sourceName = "Ren Steelfeather", sourceGUID = HORDE[6].guid, sourceFlags = 0x548, spellName = "Morsure de serpent" } }
+		client.state.recapReadyAt = Mock.Now()
+		client.fire("PLAYER_DEAD")
+		advance(6)
+		client.state.recap = nil
+	end
+	local function ToWorld(client)
+		local st = client.state
+		st.bucket, st.zone, st.subzone, st.mapID = "world", "Contreforts de Hautebrande", "Moulin-de-Tarren", 1424
+		st.secretIdentity, st.secretStats, st.secretScore, st.chatLocked = false, false, false, false
+		st.score = nil
+	end
+	local function BattlegroundKills(client)
+		return client.ns.Stats.Character(client.guid, "all", "b")
+	end
+	U.state.instanceID, U.state.instanceName = 529, "Bassin Arathi"
+	local feedWas = V.db().settings.killfeed
+	V.db().settings.killfeed = true
+	local fallbacks = U.counter("detect.bgMatchFallback")
+	EnterBG(U)
+	U.state.lifetime = U.state.lifetime + 1
+	U.fire("PLAYER_PVP_KILLS_CHANGED", "player")
+	advance(5)
+	Dies(U)
+	U.logout()
+	U.login()
+	advance(12)
+	local waited = Last(U).type == "D" and U.counter("detect.bgMatchLost") == 0
+	local linesThen = V.counter("killfeed.lines")
+	LeaveBG(U)
+	advance(20)
+	check("a match just left with no scoreboard gives the guild its line", V.counter("killfeed.lines") == linesThen + 1,
+		V.counter("killfeed.lines") - linesThen)
+	local goneOut = Last(U)
+	check("a run that may be of the match we are in waits; leaving with no scoreboard keeps the counter's delta and the deaths written",
+		waited and goneOut.type == "M" and goneOut.hk == 1 and goneOut.live == 1 and goneOut.deaths == 1 and goneOut.kb == 0
+		and U.counter("detect.bgMatchFallback") == fallbacks + 1 and U.counter("detect.bgMatchLost") == 0
+		and U.ns.Records.NoScoreboard(goneOut) == true and U.ns.Records.CheckChain(Journal(U)) == true,
+		("%s hk %s deaths %s"):format(tostring(goneOut.type), tostring(goneOut.hk), tostring(goneOut.deaths)))
+	-- A match left by logging out inside it, and a way back in the world:
+	-- its kills counted nowhere.
+	local bgThen = BattlegroundKills(U)
+	EnterBG(U)
+	U.state.lifetime = U.state.lifetime + 2
+	U.fire("PLAYER_PVP_KILLS_CHANGED", "player")
+	advance(5)
+	Dies(U)
+	local lastAt, headInside = Last(U).t, Held(U, U)
+	U.logout()
+	ToWorld(U)
+	advance(3600)
+	local feedLines, feedLinesElsewhere = U.counter("killfeed.lines"), V.counter("killfeed.lines")
+	U.login()
+	advance(3)
+	local notYet = Held(U, U) == headInside
+	advance(10)
+	local closed, bgNow = Last(U), BattlegroundKills(U)
+	advance(20)
+	check("the guild hears of the match closed late, and gets no line for it", Held(V, U) == Held(U, U)
+		and V.counter("killfeed.lines") == feedLinesElsewhere, ("%d held of %d"):format(Held(V, U), Held(U, U)))
+	V.db().settings.killfeed = feedWas
+	check("a match left by logging out inside it is closed at the next login, from what the journal holds and no more",
+		notYet and Held(U, U) == headInside + 1 and closed.type == "M" and closed.hk == 2 and closed.live == 2 and closed.kb == 0
+		and closed.deaths == 1 and closed.instanceID == 529 and closed.t == lastAt and U.ns.Records.Gain(closed) == 0
+		and U.ns.Records.NoScoreboard(closed) == true and U.ns.Records.CheckChain(Journal(U)) == true
+		and U.counter("detect.bgMatchLost") == 1 and bgNow.kills == bgThen.kills + 2 and bgNow.deaths == bgThen.deaths + 1
+		and U.counter("killfeed.lines") == feedLines and U.db().characters[U.guid].match == nil,
+		("%s hk %s deaths %s at %s, kills %d then %d"):format(tostring(closed.type), tostring(closed.hk), tostring(closed.deaths),
+			tostring(closed.instanceID), bgThen.kills, bgNow.kills))
+	U.logout()
+	U.login()
+	advance(12)
+	check("once: the next login writes nothing more", Held(U, U) == headInside + 1 and U.counter("detect.bgMatchLost") == 1)
+
+	-- Two enemies die a second apart, each HK in its own event: alone, each
+	-- event sees two deaths for its one HK. Matched together they name both, in
+	-- the order they came.
+	advance(100)
+	local trail, former, latter
+	local groupedThen, ambiguousThen = U.counter("detect.grouped"), U.counter("detect.ambiguous")
+	U.fire("UNIT_DIED", HORDE[1].guid)
+	advance(0.2)
+	GainHK(U)
+	advance(0.8)
+	U.fire("UNIT_DIED", HORDE[2].guid)
+	advance(0.2)
+	GainHK(U)
+	advance(2)
+	local soFar = #Journal(U)
+	advance(4)
+	trail = Journal(U)
+	former, latter = trail[#trail - 1], trail[#trail]
+	check("two HKs a second apart for two enemy deaths name both, each in its turn", #trail == soFar + 2
+		and former.how == "ast" and former.vname == HORDE[1].name and latter.how == "ast" and latter.vname == HORDE[2].name
+		and former.lifeHK + 1 == latter.lifeHK and latter.lifeHK == U.state.lifetime and former.t <= latter.t
+		and U.counter("detect.grouped") == groupedThen + 1 and U.counter("detect.ambiguous") == ambiguousThen
+		and #U.db().pending == 0 and U.ns.Records.CheckChain(trail) == true,
+		("%s %s / %s %s"):format(tostring(former.how), tostring(former.vname), tostring(latter.how), tostring(latter.vname)))
+	-- Three deaths for those two HKs: more deaths than HKs, none is named.
+	advance(100)
+	U.fire("UNIT_DIED", HORDE[3].guid)
+	U.fire("UNIT_DIED", HORDE[4].guid)
+	advance(0.2)
+	GainHK(U)
+	advance(1)
+	U.fire("UNIT_DIED", HORDE[5].guid)
+	advance(0.2)
+	GainHK(U)
+	advance(6)
+	trail = Journal(U)
+	former, latter = trail[#trail - 1], trail[#trail]
+	check("two HKs a second apart for three enemy deaths name none", former.how == "unk" and latter.how == "unk"
+		and U.counter("detect.ambiguous") == ambiguousThen + 1 and U.ns.Records.CheckChain(trail) == true,
+		tostring(former.how) .. " " .. tostring(latter.how))
+	-- A death only the second event is within the window of goes to it, not
+	-- to the first.
+	advance(100)
+	GainHK(U)
+	advance(2)
+	GainHK(U)
+	advance(1.9)
+	U.fire("UNIT_DIED", HORDE[6].guid)
+	advance(6)
+	trail = Journal(U)
+	former, latter = trail[#trail - 1], trail[#trail]
+	check("a death goes to an HK within two seconds of it only", former.how == "unk" and latter.how == "ast"
+		and latter.vname == HORDE[6].name and former.lifeHK + 1 == latter.lifeHK,
+		tostring(former.how) .. " " .. tostring(latter.how))
+	-- Events too far apart are matched each on its own, as before.
+	advance(100)
+	groupedThen = U.counter("detect.grouped")
+	U.fire("UNIT_DIED", HORDE[1].guid)
+	GainHK(U)
+	advance(2.5)
+	U.fire("UNIT_DIED", HORDE[2].guid)
+	GainHK(U)
+	advance(6)
+	trail = Journal(U)
+	former, latter = trail[#trail - 1], trail[#trail]
+	check("HKs more than two seconds apart are matched each on its own", former.vname == HORDE[1].name and latter.vname == HORDE[2].name
+		and U.counter("detect.grouped") == groupedThen)
+	-- A journal an older version wrote: battleground kills the world's
+	-- records follow, a battleground death alone, and a kill written as the
+	-- battleground of a scoreboard shut.
+	local monthAgo = Mock.Server() - 30 * 86400
+	local stand = U.state.lifetime
+	local ownRecords = U.ns.Records
+	ownRecords.AppendOwn({ type = "K", t = monthAgo, bucket = "b", how = "bg", guild = guild, lifeHK = stand + 1 }, "import")
+	ownRecords.AppendOwn({ type = "D", t = monthAgo + 30, bucket = "b", kkind = "p", ktail = "6938-00FEED01", kname = "Hrak Dustmaw", lifeHK = stand + 1 }, "import")
+	ownRecords.AppendOwn({ type = "D", t = monthAgo + 31, bucket = "b", kkind = "p", ktail = "6938-00FEED01", kname = "Hrak Dustmaw", lifeHK = stand + 1 }, "import")
+	ownRecords.AppendOwn({ type = "K", t = monthAgo + 60, bucket = "b", how = "bg", guild = guild, lifeHK = stand + 2 }, "import")
+	ownRecords.AppendOwn({ type = "K", t = monthAgo + 7200, bucket = "w", how = "unk", guild = guild, lifeHK = stand + 3 }, "import")
+	ownRecords.AppendOwn({ type = "D", t = monthAgo + 9000, bucket = "b", kkind = "p", ktail = "6938-00FEED01", kname = "Hrak Dustmaw", lifeHK = stand + 3 }, "import")
+	ownRecords.AppendOwn({ type = "K", t = monthAgo + 9900, bucket = "w", how = "unk", guild = guild, lifeHK = stand + 4 }, "import")
+	ownRecords.AppendOwn({ type = "M", t = monthAgo + 20000, instanceID = 529, duration = 900, hk = 0, kb = 0, deaths = 1, honor = 40,
+		lifeHK = stand + 4, live = 0, lines = {} }, "import")
+	ownRecords.AppendOwn({ type = "K", t = monthAgo + 20030, bucket = "b", how = "bg", guild = guild, lifeHK = stand + 5 }, "import")
+	ownRecords.AppendOwn({ type = "K", t = monthAgo + 30000, bucket = "w", how = "unk", guild = guild, lifeHK = stand + 6 }, "import")
+	U.state.lifetime = stand + 6
+	U.db().characters[U.guid].lifeHK = stand + 6
+	local headOld = Held(U, U)
+	U.logout()
+	U.login()
+	advance(12)
+	local oldMatch = Last(U)
+	check("battleground kills an older version left with no match record are closed too, at their own time, and nothing else is",
+		Held(U, U) == headOld + 1 and oldMatch.type == "M" and oldMatch.hk == 2 and oldMatch.live == 2 and oldMatch.deaths == 1
+		and oldMatch.t == monthAgo + 60 and oldMatch.duration == 60 and oldMatch.instanceID == nil
+		and ownRecords.CheckChain(Journal(U)) == true and U.counter("detect.bgMatchLost") == 2,
+		("head %d then %d, %s hk %s at %s"):format(headOld, Held(U, U), tostring(oldMatch.type), tostring(oldMatch.hk), tostring(oldMatch.t)))
+	U.logout()
+	U.login()
+	advance(12)
+	check("once too: the login after writes nothing more", Held(U, U) == headOld + 1 and U.counter("detect.bgMatchLost") == 2)
+	U.state.instanceID, U.state.instanceName = nil, nil
+
+	-- A /reload while the guild is asked for the records a crash lost: the
+	-- jump is still owed at the next login, and the record that waited
+	-- behind it is still there.
+	U.logout()
+	U.login()
+	advance(30)
+	V.logout()
+	GainHK(U, 2)
+	advance(5)
+	local headThen = Held(U, U)
+	U.crash()
+	U.login()
+	advance(8)
+	local holding = U.ns.Records.Holding()
+	GainHK(U)
+	advance(5)
+	local _, waiting = U.ns.Records.Holding()
+	U.logout()
+	U.login()
+	advance(3)
+	local again, still = U.ns.Records.Holding()
+	advance(130)
+	local ownJournal = Journal(U)
+	local jump, after = ownJournal[#ownJournal - 1], ownJournal[#ownJournal]
+	check("a /reload during a recovery loses neither the jump nor the record that waited behind it", holding == true and waiting == 1
+		and again == true and still == 1 and U.counter("detect.jumpOwed") == 1 and jump.type == "X"
+		and jump.toHK - jump.fromHK == 2 and after.type == "K" and after.lifeHK == U.state.lifetime
+		and U.ns.Records.CheckChain(ownJournal) == true and U.db().characters[U.guid].held == nil,
+		("%s %s, waiting %s then %s, head %d"):format(tostring(jump.type), tostring(after.type), tostring(waiting), tostring(still), headThen))
+
+	-- A guild joined during the session: greeted at once, as at a login.
+	local list = Mock.GuildRoster()
+	list[#list + 1] = { guid = Jo.guid, rank = 4 }
+	Mock.SetGuildRoster(list)
+	U.fire("GUILD_ROSTER_UPDATE")
+	advance(12)
+	local silent = Jo.counter("sync.out.H.Success") == 0
+	Jo.state.guild = guild
+	Jo.fire("PLAYER_GUILD_UPDATE", "player")
+	local greeted = Mock.advanceUntil(function() return Jo.counter("sync.out.H.Success") >= 1 end, 60)
+	local sinceJoined = #network.sent
+	local told = Mock.advanceUntil(function() return Held(Jo, U) > 0 end, 240)
+	check("a guild joined during the session gets a hello within the minute, and its journals come", silent and greeted and told
+		and Jo.counter("sync.guildChanged") == 1, ("%s %s %s"):format(tostring(silent), tostring(greeted), tostring(told)))
+	-- Ulric's copy of Vesna's journal has a hole (the record that failed
+	-- validation): its page comes without it however often it is asked.
+	advance(60)
+	local asks = 0
+	for index = sinceJoined + 1, #network.sent do
+		local sent = network.sent[index]
+		if sent.from == Jo.name and sent.text:find("Q^" .. vTail .. "^", 1, true) == 1 then asks = asks + 1 end
+	end
+	check("a page that brings nothing new is not asked for again and again from the holder that sent it", asks >= 1 and asks <= 2
+		and Jo.counter("sync.pageNothingNew") >= 1 and Held(Jo, V) == 2, asks)
+
+	-- From the independent review. A hello says the lifetime count only
+	-- when it is known: said as 0, holders would purge the journal.
+	local saidLife = U.db().characters[U.guid].lifeHK
+	U.db().characters[U.guid].lifeHK = nil
+	local sinceHello = #network.sent
+	U.ns.Sync.SendHello("recovery")
+	advance(5)
+	U.db().characters[U.guid].lifeHK = saidLife
+	local hello
+	for index = sinceHello + 1, #network.sent do
+		local sent = network.sent[index]
+		if sent.from == U.name and sent.text:sub(1, 2) == "H^" then hello = sent.text end
+	end
+	local helloFields = {}
+	for field in ((hello or "") .. "^"):gmatch("([^%^]*)%^") do helloFields[#helloFields + 1] = field end
+	check("a hello from a client that does not know its counter says no count, not zero", hello ~= nil and helloFields[6] == ""
+		and helloFields[5] == tostring((Held(U, U))), tostring(hello))
+
+	-- A match record with six guild teammates on its scoreboard does not
+	-- fit one message: the guild is told the head and takes the page.
+	local tooLong = U.counter("sync.recordTooLong")
+	local teammates = {}
+	for index = 1, 6 do
+		teammates[index] = { tail = ("1234-000000B%d"):format(index), name = ("Teammate Number%d"):format(index), kb = 3, hk = 12, deaths = 2, honor = 150 }
+	end
+	U.ns.Records.AppendOwn({ type = "M", t = Mock.Server(), instanceID = 30, duration = 900, winner = 1, hk = 0, kb = 0, deaths = 1,
+		honor = 120, lifeHK = U.state.lifetime, live = 0, mapID = 1459, lines = teammates })
+	local arrived = Mock.advanceUntil(function() return Held(Jo, U) == Held(U, U) end, 180)
+	check("a record too long for one message is announced, and the guild takes its page", U.counter("sync.recordTooLong") == tooLong + 1
+		and arrived, ("%d / %d"):format(Held(Jo, U), (Held(U, U))))
+
+	-- Two HKs left waiting by a /reload are settled in the order they came,
+	-- and one left by another character of the account is left for it.
+	GainHK(U)
+	advance(1)
+	GainHK(U)
+	U.logout()
+	local waitingSaved = #U.saved.pending
+	U.saved.pending[#U.saved.pending + 1] = { guid = Guid(99), t = Mock.Server(), clock = 0, bucket = "w", count = 1, lifeHK = 7 }
+	U.login()
+	advance(10)
+	local settled = Journal(U)
+	check("HKs left waiting by a /reload are settled in the order they came, another character's left for it", waitingSaved == 2
+		and settled[#settled].lifeHK == U.state.lifetime and settled[#settled - 1].lifeHK == U.state.lifetime - 1
+		and U.ns.Records.CheckChain(settled) == true and #U.db().pending == 1 and U.db().pending[1].guid == Guid(99),
+		("%d waiting, %s then %s"):format(waitingSaved, tostring(settled[#settled - 1].lifeHK), tostring(settled[#settled].lifeHK)))
+	U.db().pending = {}
+
+	-- From one battleground straight into another: each has its match.
+	EnterBG(U)
+	U.state.lifetime = U.state.lifetime + 1
+	U.fire("PLAYER_PVP_KILLS_CHANGED", "player")
+	advance(5)
+	U.state.score = { { name = "Ulric Fenwater", guid = U.guid, kb = 1, hk = 1, deaths = 0, honor = 30, faction = 1, class = "WARRIOR", race = "Humain" } }
+	U.state.secretScore = false
+	U.fire("PVP_MATCH_COMPLETE", 1, 300)
+	advance(8)
+	local firstMatch = Last(U)
+	U.state.instanceID = 489
+	EnterBG(U)
+	U.state.lifetime = U.state.lifetime + 2
+	U.fire("PLAYER_PVP_KILLS_CHANGED", "player")
+	advance(5)
+	U.state.score = { { name = "Ulric Fenwater", guid = U.guid, kb = 0, hk = 2, deaths = 1, honor = 40, faction = 1, class = "WARRIOR", race = "Humain" } }
+	U.state.secretScore = false
+	U.fire("PVP_MATCH_COMPLETE", 1, 400)
+	advance(8)
+	local secondMatch = Last(U)
+	check("a battleground entered straight from another has a match of its own", firstMatch.type == "M" and firstMatch.hk == 1
+		and secondMatch.type == "M" and secondMatch.hk == 2 and secondMatch.live == 2 and secondMatch.instanceID == 489
+		and secondMatch.seq > firstMatch.seq and U.ns.Records.CheckChain(Journal(U)) == true,
+		("%s %s / %s %s"):format(firstMatch.type, tostring(firstMatch.hk), secondMatch.type, tostring(secondMatch.hk)))
+	U.state.instanceID = nil
+	LeaveBG(U)
+	advance(20)
+
+	-- The kill feed's tab closed on one character: nothing is expected of
+	-- that character any more, so the feed, ticked again on another one,
+	-- does not turn itself off at this one's next login.
+	U.asPlayer(U.env.FCF_OpenNewWindow, U.ns.L.KILLFEED_TAB, true)
+	U.ns.Killfeed.SetTab(true)
+	U.ns.Killfeed.Enable()
+	local usedTab = U.db().characters[U.guid].feedTabUsed
+	U.asPlayer(U.env.FCF_Close, FeedWindow(U).frame)
+	U.ns.Fire("RecordStored", Jo.guid, 1, { type = "K", seq = 1, t = Mock.Server(), bucket = "w", how = "kb", vtail = "6938-00FEED02",
+		vname = "Hrak Dustmaw", vclass = "WARRIOR", vrace = "Orc", mapID = 1424 }, "")
+	advance(25)
+	check("a kill feed tab closed leaves nothing expected of that character", usedTab == true and U.db().settings.killfeed == false
+		and U.db().characters[U.guid].feedTabUsed == nil, tostring(U.db().characters[U.guid].feedTabUsed))
+
+	-- A crash, then a cold login where the guild's name comes a moment
+	-- after the character: the guild is still asked for the lost records.
+	V.state.lifetime = V.state.lifetime + 2
+	V.state.guildNameHidden = true
+	local startedBefore = (V.saved.counters or {})["sync.recoveryStart"] or 0
+	V.login()
+	advance(3)
+	local asking = V.ns.Records.Holding()
+	V.state.guildNameHidden = false
+	V.fire("PLAYER_GUILD_UPDATE", "player")
+	advance(140)
+	check("a counter jump at a login where the guild's name comes late still asks the guild first", asking == true
+		and V.counter("sync.recoveryStart") == startedBefore + 1 and V.counter("sync.hello.recovery") >= 1
+		and V.ns.Records.CheckChain(Journal(V)) == true, tostring(asking))
+
+	-- A guild left: its members are gone from the lists at once.
+	local listedBefore = #Jo.ns.Stats.Players("all", "all")
+	local countedBefore = Jo.ns.Stats.Guild("all", "all")
+	local rosterSaid = 0
+	Jo.ns.Hook("RosterUpdated", function() rosterSaid = rosterSaid + 1 end)
+	Jo.state.guild = nil
+	Jo.fire("PLAYER_GUILD_UPDATE", "player")
+	advance(2)
+	local countedAfter = Jo.ns.Stats.Guild("all", "all")
+	check("out of a guild the board counts the character's own journal alone", countedBefore.authors >= 2 and countedAfter.authors <= 1
+		and countedAfter.kills < countedBefore.kills and Jo.ns.Records.InGuild(U.guid) == false and Jo.ns.Records.InGuild(Jo.guid) == true,
+		("%d journals then %d"):format(countedBefore.authors, countedAfter.authors))
+	check("a guild left empties the roster and the players' list, and the sync starts over", listedBefore >= 1 and Jo.ns.Identity.roster.count == 0
+		and #Jo.ns.Stats.Players("all", "all") == 0 and Jo.counter("sync.guildChanged") == 2 and Jo.ns.Sync.Status().phase == "noguild"
+		and rosterSaid >= 1,
+		Jo.ns.Identity.roster.count)
+
+	-- Old pages are packed one at a time, and never in combat.
+	local Ke = NewClient({ name = "Kendra Ashgrove", guid = Guid(65), class = "DRUID", lifetime = 5, rank = 4 })
+	local longGuid, log = Guid(72), {}
+	local longAgo = Mock.Server() - 3 * 7 * 86400
+	for seq = 1, 600 do
+		log[seq] = A.ns.Records.Encode({ type = "K", seq = seq, t = longAgo + seq, bucket = "w", how = "unk", lifeHK = seq })
+	end
+	Ke.saved = { authors = { [longGuid] = { head = 600, count = 600, missing = {}, pages = {}, log = log } } }
+	Ke.state.combat = true
+	Ke.login()
+	advance(26)
+	local inCombat = Count(Ke.db().authors[longGuid].pages)
+	Ke.state.combat = false
+	advance(5)
+	local first = Count(Ke.db().authors[longGuid].pages)
+	advance(2)
+	local second = Count(Ke.db().authors[longGuid].pages)
+	advance(2)
+	check("old pages are packed one at a time, two seconds apart, and none in combat", inCombat == 0 and first == 1 and second == 2
+		and Count(Ke.db().authors[longGuid].pages) == 2 and Ke.ns.Stats.Character(longGuid, "all", "all").kills == 600,
+		("%d %d %d %d"):format(inCombat, first, second, Count(Ke.db().authors[longGuid].pages)))
+
+	-- The stats. One enemy death reported by two members across the weekly
+	-- reset is one death: last week's, where it was first reported.
+	local S = U.ns.Stats
+	local reset = S.WeekStart(S.CurrentWeek())
+	local function Report(guid, t, seq, guildName)
+		seq = seq or 1
+		local line = ("K1;%d;%d;w;kb;6938-00FEED01;Hrak Dustmaw;WARRIOR;Orc;30;1424;0.4;0.5;%s;%d;;F"):format(seq, t, guildName or guild, seq)
+		U.ns.Records.Store(guid, seq, line, "page")
+		U.ns.Fire("RecordStored", guid, seq, U.ns.Records.Decode(line), line)
+	end
+	-- Both journals are the guild's before the reports that matter: a journal
+	-- that joins the guild's makes every count again, and would hide what one
+	-- record must drop.
+	Report(Guid(73), reset - 400000)
+	Report(Guid(74), reset - 500000)
+	local base = { all = S.Guild("all", "w").distinct, week = S.Guild("week", "w").distinct, last = S.Guild("last", "w").distinct }
+	Report(Guid(73), reset + 1, 2)
+	local one = { all = S.Guild("all", "w").distinct, week = S.Guild("week", "w").distinct, last = S.Guild("last", "w").distinct }
+	Report(Guid(74), reset - 2, 2)
+	local two = { all = S.Guild("all", "w").distinct, week = S.Guild("week", "w").distinct, last = S.Guild("last", "w").distinct }
+	check("an enemy death reported on both sides of the weekly reset counts once, where it was first reported",
+		one.all == base.all + 1 and one.week == base.week + 1 and one.last == base.last
+		and two.all == base.all + 1 and two.week == base.week and two.last == base.last + 1,
+		("%d %d %d / %d %d %d / %d %d %d"):format(base.all, base.week, base.last, one.all, one.week, one.last, two.all, two.week, two.last))
+	local own = S.AuthorAggregate(U.guid)
+	local playersBefore = S.Players("all", "all")
+	U.ns.Fire("ProfileChanged", V.guid)
+	check("a profile heard leaves the journals' numbers alone, and the lists that show names are made again",
+		S.AuthorAggregate(U.guid) == own and S.Players("all", "all") ~= playersBefore)
+	Report(Guid(75), reset + 500)
+	check("a record of one journal leaves the others' numbers alone, a journal that joins the guild's too", S.AuthorAggregate(U.guid) == own)
+	-- Only the journals of the guild played now are the guild's: a member
+	-- who left stays (those above are in no roster and name this guild),
+	-- a character of the account in another guild does not, on the board
+	-- or in what is handed to the guild.
+	local function Hrak()
+		for _, victim in ipairs(S.Victims("all", "all")) do
+			if victim.tail == "6938-00FEED01" then return victim.count end
+		end
+		return 0
+	end
+	local function Listed(guid)
+		for _, entry in ipairs(U.ns.Sync.State().inventory) do
+			if entry.tail == Tail(guid) then return true end
+		end
+		return false
+	end
+	local guildKills, guildDistinct, hrakKills = S.Guild("all", "w").kills, S.Guild("all", "w").distinct, Hrak()
+	Report(Guid(76), reset + 600, 1, "Another Banner")
+	Report(Guid(76), reset + 9000, 2, "Another Banner")
+	local sinceList = #network.sent
+	U.ns.Sync.SendHello("import")
+	advance(40)
+	-- A member behind on that journal is not answered, and one ahead on it
+	-- is not asked.
+	V.ns.Sync.SendRaw(("I^%s=1/1"):format(Tail(Guid(76))), "GUILD")
+	advance(30)
+	V.ns.Sync.SendRaw(("I^%s=5/5"):format(Tail(Guid(76))), "GUILD")
+	advance(15)
+	local handedOn = false
+	for index = sinceList + 1, #network.sent do
+		local sent = network.sent[index]
+		if sent.from == U.name and sent.text:find(Tail(Guid(76)), 1, true) then handedOn = true end
+	end
+	check("a journal of another guild neither counts for this one nor is handed to it, a member who left still counts",
+		U.ns.Records.InGuild(Guid(76)) == false and U.ns.Records.InGuild(Guid(73)) == true and S.Guild("all", "w").kills == guildKills
+		and not handedOn and not Listed(Guid(76)) and Listed(Guid(73))
+		and U.db().authors[Guid(76)].guild == "Another Banner" and S.Guild("all", "w").distinct == guildDistinct
+		and Hrak() == hrakKills and hrakKills >= 2, S.Guild("all", "w").kills .. " / " .. guildKills)
+	local feedHas = false
+	for _, item in ipairs(S.Feed(500, "all", "all")) do
+		if item.author == Guid(76) then feedHas = true end
+	end
+	local refusedBefore, servedBefore = U.counter("sync.pageForeign"), U.counter("sync.pageSent")
+	V.ns.Sync.SendRaw(("Q^%s^1"):format(Tail(Guid(76))), "WHISPER", U.name)
+	advance(10)
+	check("its kills stay out of the feed, and a member who asks for one of its pages is told there is none",
+		not feedHas and U.counter("sync.pageForeign") == refusedBefore + 1 and U.counter("sync.pageSent") == servedBefore
+		and U.ns.Records.Foreign(Guid(76)) == true and U.ns.Records.Foreign(Guid(73)) == false,
+		U.counter("sync.pageForeign") - refusedBefore)
+	-- A journal with no kill to name a guild is not counted, and not held to
+	-- be another guild's either: the page that says may be the next one.
+	local deathLine = ("D1;1;%d;w;6938-00FEED01;Hrak Dustmaw;WARRIOR;Orc;player;;1424;0.4;0.5;7;;30;"):format(reset + 700)
+	local deathKept = U.ns.Records.Store(Guid(77), 1, deathLine, "page")
+	U.ns.Fire("RecordStored", Guid(77), 1, U.ns.Records.Decode(deathLine), deathLine)
+	local undecided = deathKept and U.ns.Records.InGuild(Guid(77)) == false and U.ns.Records.Foreign(Guid(77)) == false
+	Report(Guid(77), reset + 800, 2)
+	local silentLine = ("D1;1;%d;w;6938-00FEED01;Hrak Dustmaw;WARRIOR;Orc;player;;1424;0.4;0.5;7;;30;"):format(reset + 900)
+	U.ns.Records.Store(Guid(84), 1, silentLine, "page")
+	local outside = U.ns.Records.InGuild(Guid(84)) == false
+	Mock.AddPlayer(Guid(84), { name = "Sorrel Dunmore", class = "MAGE", race = "Human", faction = "Alliance", guild = guild, lifetime = 0 })
+	local members = Mock.GuildRoster()
+	members[#members + 1] = { guid = Guid(84), rank = 4 }
+	Mock.SetGuildRoster(members)
+	U.fire("GUILD_ROSTER_UPDATE")
+	advance(12)
+	check("a journal nothing says the guild of is the guild's once its character is in the roster",
+		outside and U.ns.Records.InGuild(Guid(84)) == true and U.db().authors[Guid(84)].guild == guild)
+	check("a journal nothing says the guild of waits, uncounted and still asked for, until a kill of it names the guild",
+		undecided and U.ns.Records.InGuild(Guid(77)) == true and U.db().authors[Guid(77)].guild == guild, tostring(deathKept))
+	-- Scoreboards and the matches left with none. Pell is on Odalys's
+	-- scoreboard of a match and left it with no scoreboard of its own a
+	-- little later: one match, and the scoreboard's row stands. An earlier
+	-- match of Pell's in the same battleground, while Odalys was in hers, is
+	-- another one. Two matches left within two minutes of each other both
+	-- count. A match closed from the journal, which does not name its
+	-- battleground, is found on a teammate's scoreboard by its time.
+	local odalys, pell = Guid(81), Guid(82)
+	Report(odalys, reset - 90000, 1)
+	Report(pell, reset - 90010, 1)
+	local played = reset - 80000
+	local function Match(guid, seq, fields)
+		fields.type, fields.seq, fields.lifeHK = "M", seq, fields.lifeHK or 1
+		fields.live = fields.live or fields.hk
+		fields.lines = fields.lines or {}
+		local line = U.ns.Records.Encode(fields)
+		U.ns.Records.Store(guid, seq, line, "page")
+	end
+	local function PellRow(kb, hk, deaths)
+		return { { tail = Tail(pell), name = "Pell Brightwater", kb = kb, hk = hk, deaths = deaths, honor = 100 } }
+	end
+	Match(odalys, 2, { t = played, instanceID = 529, duration = 900, winner = 1, hk = 10, kb = 3, deaths = 2, honor = 200, lines = PellRow(2, 5, 1) })
+	Match(pell, 2, { t = played - 400, instanceID = 529, duration = 300, hk = 3, kb = 0, deaths = 0, honor = 0 })
+	Match(pell, 3, { t = played + 200, instanceID = 529, duration = 300, hk = 4, kb = 0, deaths = 0, honor = 0 })
+	U.ns.Fire("JournalChanged", odalys)
+	U.ns.Fire("JournalChanged", pell)
+	local afterOne = S.Character(pell, "all", "b")
+	local firstAbsorbed = S.MatchCredits().absorbed
+	Match(pell, 4, { t = played + 5000, instanceID = 529, duration = 300, hk = 2, kb = 0, deaths = 0, honor = 0 })
+	Match(pell, 5, { t = played + 5060, instanceID = 529, duration = 30, hk = 1, kb = 0, deaths = 0, honor = 0 })
+	U.ns.Fire("JournalChanged", pell)
+	local afterTwo = S.Character(pell, "all", "b")
+	Match(odalys, 3, { t = played + 20000, instanceID = 489, duration = 600, winner = 0, hk = 7, kb = 1, deaths = 4, honor = 150, lines = PellRow(0, 6, 3) })
+	Match(pell, 6, { t = played + 19900, duration = 200, hk = 6, kb = 0, deaths = 2, honor = 0 })
+	-- A match of another battleground left at that time is not that one, and
+	-- a second scoreboard of Odalys's own is another match.
+	Match(pell, 7, { t = played + 19950, instanceID = 529, duration = 100, hk = 2, kb = 0, deaths = 0, honor = 0 })
+	Match(odalys, 4, { t = played + 20050, instanceID = 489, duration = 30, hk = 1, kb = 1, deaths = 0, honor = 20 })
+	U.ns.Fire("JournalChanged", odalys)
+	U.ns.Fire("JournalChanged", pell)
+	local afterThree = S.Character(pell, "all", "b")
+	check("a member on a teammate's scoreboard who left the match with none of its own counts once, with the scoreboard's row",
+		afterOne.kills == 8 and afterOne.kb == 2 and afterOne.deaths == 1 and firstAbsorbed == 1,
+		("%d kills, %d blows, %d deaths, %d taken"):format(afterOne.kills, afterOne.kb, afterOne.deaths, firstAbsorbed))
+	check("two matches a member left within two minutes of each other both count", afterTwo.kills == 11, afterTwo.kills)
+	check("a match closed from the journal is found on a teammate's scoreboard by its time",
+		afterThree.kills == 19 and afterThree.deaths == 4 and S.MatchCredits().absorbed == 2
+		and S.Character(odalys, "all", "b").kills == 18,
+		("%d kills, %d deaths, %d taken"):format(afterThree.kills, afterThree.deaths, S.MatchCredits().absorbed))
+	-- A record heard live is folded into what the stats keep of its journal:
+	-- the same as reading the journal again, whatever the record is. One
+	-- that comes before what was read is not folded: the journal is read again.
+	local function Alike(here, there)
+		if type(here) ~= "table" or type(there) ~= "table" then return here == there end
+		for key, value in pairs(here) do
+			if not Alike(value, there[key]) then return false end
+		end
+		for key in pairs(there) do
+			if here[key] == nil then return false end
+		end
+		return true
+	end
+	local folder = Guid(83)
+	local foldAt = reset - 70000
+	local function HeardLive(seq, fields)
+		fields.seq = seq
+		local line = U.ns.Records.Encode(fields)
+		local kept = U.ns.Records.Store(folder, seq, line, "author")
+		U.ns.Fire("RecordStored", folder, seq, U.ns.Records.Decode(line), line)
+		return kept
+	end
+	local function Kill(t, life, how, bucket)
+		return { type = "K", t = t, bucket = bucket or "w", how = how, guild = guild, lifeHK = life, vtail = how ~= "unk" and how ~= "bg" and "6938-00FEED02" or nil,
+			vname = how ~= "unk" and how ~= "bg" and "Varga Emberfang" or nil, mapID = 1424, x = 0.4, y = 0.5 }
+	end
+	local function Death(t, life)
+		return { type = "D", t = t, bucket = "w", kkind = "p", ktail = "6938-00FEED02", kname = "Varga Emberfang", lifeHK = life, mapID = 1424 }
+	end
+	HeardLive(1, Kill(foldAt, 10, "kb"))
+	local keptAggregate = S.AuthorAggregate(folder)
+	local foldedBefore = U.counter("stats.folded")
+	HeardLive(2, { type = "X", t = foldAt + 10, bucket = "u", fromHK = 10, toHK = 14 })
+	HeardLive(3, Kill(foldAt + 20, 12, "kb"))
+	HeardLive(4, Kill(foldAt + 30, 15, "unk"))
+	HeardLive(5, Death(foldAt + 40, 15))
+	HeardLive(6, Death(foldAt + 41, 15))
+	HeardLive(7, { type = "M", t = foldAt + 2000, instanceID = 529, duration = 900, hk = 3, kb = 1, deaths = 1, honor = 50, lifeHK = 18, live = 0, lines = {} })
+	HeardLive(8, Kill(foldAt + 3000, 19, "bg", "b"))
+	HeardLive(10, Kill(foldAt + 8 * 86400, 21, "ast"))
+	HeardLive(11, { type = "X", t = foldAt + 8 * 86400 + 10, bucket = "u", fromHK = 20, toHK = 25 })
+	local sameTable = S.AuthorAggregate(folder) == keptAggregate
+	local foldedNow = U.counter("stats.folded") - foldedBefore
+	local numbers = S.Character(folder, "all", "all")
+	S.Invalidate(folder)
+	local readAgain = S.AuthorAggregate(folder)
+	local readNumbers = S.Character(folder, "all", "all")
+	check("a record heard live is folded into what the stats keep of its journal, and says what reading the journal says",
+		sameTable and foldedNow == 9 and readAgain ~= keptAggregate and Alike(keptAggregate, readAgain) and Alike(numbers, readNumbers)
+		and keptAggregate.repeated == 1 and keptAggregate.maxSeq == 11 and numbers.kills == 14 and numbers.deaths == 2,
+		("%s, %d folded, %d kills, %d deaths, alike %s"):format(tostring(sameTable), foldedNow, numbers.kills, numbers.deaths,
+			tostring(Alike(keptAggregate, readAgain))))
+	foldedBefore = U.counter("stats.folded")
+	HeardLive(9, Kill(foldAt + 4000, 20, "kb"))
+	check("one that comes before what was read is not folded: the journal is read again",
+		U.counter("stats.folded") == foldedBefore and S.AuthorAggregate(folder) ~= readAgain and S.AuthorAggregate(folder).records == 11
+		and S.Character(folder, "all", "all").kills == 15, S.Character(folder, "all", "all").kills)
+	local thisWeek = S.Players("week", "all")
+	U.db().weekAnchor = U.db().weekAnchor - 7 * 86400
+	local nextWeek = S.Players("week", "all")
+	U.db().weekAnchor = U.db().weekAnchor + 7 * 86400
+	S.Invalidate()
+	check("at the weekly reset this week's ranking is another one, not the one kept", nextWeek ~= thisWeek)
+	local ranking = S.Players("all", "all")
+	U.ns.UI.Show()
+	U.ns.UI.SetBucket("all")
+	U.ns.UI.SetPeriod("all")
+	U.ns.UI.SelectTab("players")
+	local view = U.ns.UI.Frame().tabFrames.players.view
+	view.sortKey, view.sortField, view.sortDesc = "deaths", nil, false
+	view:Refresh()
+	local inOrder = S.Players("all", "all") == ranking
+	for index, row in ipairs(ranking) do
+		if row.rank ~= index then inOrder = false end
+	end
+	check("sorting the list by a column leaves the ranking the stats keep in its order", inOrder and #ranking >= 2, #ranking)
+	-- The hunt boards hold every enemy of the period: one far down the list,
+	-- killed once and long ago, is found by its name too.
+	local crowd = Guid(78)
+	for index = 1, 320 do
+		local line = ("K1;%d;%d;w;kb;6938-00FE%04X;%s;WARRIOR;Orc;30;1424;0.4;0.5;%s;%d;;F"):format(index, reset + 1000 + index, index,
+			index == 1 and "Zzyrgath Lastling" or ("Grunt " .. index), guild, index)
+		U.ns.Records.Store(crowd, index, line, "page")
+	end
+	U.ns.Fire("JournalChanged", crowd)
+	U.ns.UI.SelectTab("hunt")
+	local hunt = U.ns.UI.Frame().tabFrames.hunt
+	hunt.filters.searchBox:SetText("zzyrg")
+	local farDown = Rows(hunt.victims)
+	check("the hunt tab finds an enemy far down the list, beyond the first three hundred",
+		#hunt.victimRows > 320 and #farDown == 1 and farDown[1].row.data.name == "Zzyrgath Lastling"
+		and hunt.victimRows[#hunt.victimRows].name == "Zzyrgath Lastling", #hunt.victimRows .. " rows, " .. #farDown .. " shown")
+	Click(hunt.filters.reset)
+	U.ns.UI.Hide()
+
+	-- Everything the stats keep says what a fresh count says, and the enemy
+	-- deaths of all time are what one list of every kill gives, as before 1.0.4.
+	local function Near(here, there)
+		if here.mapID == nil or here.mapID ~= there.mapID then return false end
+		if here.x == nil or there.x == nil then return true end
+		return math.abs(here.x - there.x) <= 0.03 and math.abs(here.y - there.y) <= 0.03
+	end
+	local function OneList(client)
+		local items = {}
+		for guid in pairs(client.ns.Records.Scope()) do
+			client.ns.Records.Each(guid, function(entry)
+				if entry.type == "K" and entry.bucket ~= "b" then items[#items + 1] = { t = entry.t, record = entry, author = guid } end
+			end)
+		end
+		table.sort(items, function(left, right)
+			if left.t ~= right.t then return left.t < right.t end
+			return left.author < right.author
+		end)
+		local distinct, lastSeen = 0, {}
+		for index, item in ipairs(items) do
+			local entry = item.record
+			if entry.vtail then
+				local last = lastSeen[entry.vtail]
+				if not last or item.t - last > 5 then distinct = distinct + 1 end
+				lastSeen[entry.vtail] = item.t
+			else
+				local absorbed = false
+				local j = index - 1
+				while j >= 1 and item.t - items[j].t <= 5 do
+					local other = items[j]
+					if other.record.vtail or (other.author ~= item.author and Near(other.record, entry)) then
+						absorbed = true
+						break
+					end
+					j = j - 1
+				end
+				j = index + 1
+				while not absorbed and j <= #items and items[j].t - item.t <= 5 do
+					if items[j].record.vtail then absorbed = true end
+					j = j + 1
+				end
+				if not absorbed then distinct = distinct + 1 end
+			end
+		end
+		return distinct
+	end
+	local function Numbers(client)
+		local stats = client.ns.Stats
+		local parts = {}
+		for _, period in ipairs(stats.PERIODS) do
+			for _, bucket in ipairs(stats.BUCKETS) do
+				local total = stats.Guild(period, bucket)
+				parts[#parts + 1] = ("%s %s: %d %d %d %d"):format(period, bucket, total.kills, total.kb, total.deaths, total.distinct)
+				for _, row in ipairs(stats.Players(period, bucket)) do
+					parts[#parts + 1] = ("%s %s %s: %d %d %d"):format(period, bucket, tostring(row.name), row.kills, row.kb, row.deaths)
+				end
+				for _, row in ipairs(stats.Victims(period, bucket, nil, 500)) do
+					parts[#parts + 1] = ("%s %s victim %s: %d %d"):format(period, bucket, row.tail, row.count, row.byCount)
+				end
+				for _, row in ipairs(stats.Killers(period, bucket, nil, 500)) do
+					parts[#parts + 1] = ("%s %s killer %s: %d"):format(period, bucket, row.key, row.count)
+				end
+			end
+			for _, row in ipairs(stats.Feed(15, "all", period)) do
+				parts[#parts + 1] = ("%s feed %d %s"):format(period, row.t, row.author)
+			end
+		end
+		table.sort(parts)
+		return table.concat(parts, "\n")
+	end
+	local stale, miscounted, looked = {}, {}, 0
+	for _, client in ipairs(Mock.clients) do
+		if client.online and client.addon == Mock.ADDON then
+			looked = looked + 1
+			local kept = Numbers(client)
+			client.ns.Stats.Invalidate()
+			if kept ~= Numbers(client) then stale[#stale + 1] = client.name end
+			local whole, byWeek = OneList(client), client.ns.Stats.Guild("all", "w").distinct
+			if whole ~= byWeek then miscounted[#miscounted + 1] = ("%s %d/%d"):format(client.name, whole, byWeek) end
+		end
+	end
+	check("what the stats keep is what a fresh count gives, for every member", looked >= 8 and #stale == 0, table.concat(stale, ", "))
+	check("the enemy deaths of all time, counted week by week, are those of one list of every kill", #miscounted == 0,
+		table.concat(miscounted, ", "))
+	-- The latest of all time, cut at the limit, against the whole list.
+	local latest, whole = A.ns.Stats.Feed(7, "all", "all"), {}
+	for guid in pairs(A.db().authors) do
+		local agg = A.ns.Stats.AuthorAggregate(guid)
+		for _, item in ipairs(agg.kills) do whole[#whole + 1] = item end
+		for _, item in ipairs(agg.deaths) do whole[#whole + 1] = item end
+	end
+	table.sort(whole, function(left, right)
+		if left.t ~= right.t then return left.t > right.t end
+		return left.author < right.author
+	end)
+	local sameFeed = #latest == math.min(7, #whole)
+	for index, row in ipairs(latest) do
+		if row.t ~= whole[index].t or row.author ~= whole[index].author or row.info == nil then sameFeed = false end
+	end
+	check("the latest kills and deaths of all time are the first of the whole list", sameFeed and #whole > 7, #latest .. " of " .. #whole)
+end
+Upkeep()
+
+--------------------------------------------------------------------------------
+section("The guild's announcements")
+--------------------------------------------------------------------------------
+
+-- A member allowed to publish writes an announcement in the board; the
+-- guild holds it and hands it on; the members it is for are told until
+-- they have looked at it or its event has passed. Played in a guild of its
+-- own: the first rank, an officer, two members and a recruit.
+local function Announcements()
+	local guild = "Ember Vigil"
+	local M = NewClient({ name = "Maelis Hartwell", guid = Guid(91), class = "PALADIN", guild = guild, lifetime = 10, rank = 0 })
+	local O = NewClient({ name = "Orrin Blackmoor", guid = Guid(92), class = "WARRIOR", guild = guild, lifetime = 10, rank = 1 })
+	local P = NewClient({ name = "Pia Lindqvist", guid = Guid(93), class = "MAGE", guild = guild, lifetime = 10, rank = 3 })
+	local Q = NewClient({ name = "Quentin Ashby", guid = Guid(94), class = "PRIEST", guild = guild, lifetime = 10, rank = 3 })
+	local Rh = NewClient({ name = "Rhea Castellan", guid = Guid(95), class = "ROGUE", guild = guild, lifetime = 10, rank = 4 })
+	local roster = Mock.GuildRoster()
+	for _, entry in ipairs({ { M, 0 }, { O, 1 }, { P, 3 }, { Q, 3 }, { Rh, 4 } }) do
+		roster[#roster + 1] = { guid = entry[1].guid, rank = entry[2] }
+	end
+	Mock.SetGuildRoster(roster)
+	local Tail = A.ns.Util.Tail
+	O.login()
+	P.login()
+	Rh.login()
+	advance(80)
+	local function Unseen(client) return #client.ns.News.Unseen() end
+	local function Lines(client, from)
+		return CountSince(client, from, client.ns.L.NEWS_CHAT_ONE) + CountSince(client, from, (client.ns.L.NEWS_CHAT_MANY:gsub("^%%d ", "")))
+	end
+	local function ShownHas(client, id)
+		for _, item in ipairs(client.ns.News.Shown()) do
+			if item.id == id then return true end
+		end
+		return false
+	end
+	local function Hears(client, message, sender, channel)
+		client.fire("CHAT_MSG_ADDON", "KBS", message, channel or "GUILD", sender)
+	end
+	local soon = Mock.Server() + 3 * 86400
+
+	-- Who may publish, until the first rank says otherwise: the two first ranks.
+	local refused, why = P.ns.News.Publish({ title = "Not mine to say", when = soon })
+	check("the two first ranks publish until the first rank says otherwise, and nobody else", O.ns.News.CanPublish() == true
+		and P.ns.News.CanPublish() == false and refused == nil and why == "right" and O.ns.News.Limit() == 1
+		and P.ns.News.SetLimit(3) == false)
+	local nothing, noTitle = O.ns.News.Publish({ title = "   ", when = soon })
+	local past, noDate = O.ns.News.Publish({ title = "Yesterday's raid", when = Mock.Server() - 60 })
+	local badLink, noLink = O.ns.News.Publish({ title = "A link", when = soon, link = "javascript:alert(1)" })
+	check("an announcement needs a title, a date to come and a web address for a link", nothing == nil and noTitle == "title"
+		and past == nil and noDate == "when" and badLink == nil and noLink == "link")
+
+	-- The officer announces to the whole guild.
+	local chatP, chatRh = #P.chat, #Rh.chat
+	local body = "Meet at the docks.\nBring a ^ caret, a ~tilde, a ~n and 100% of your gear."
+	local first = O.ns.News.Publish({ title = "Raid on the coast", when = soon, text = body, link = "https://discord.com/channels/1/2/3?x=~y" })
+	advance(20)
+	P.fire("GUILD_ROSTER_UPDATE")
+	Rh.fire("GUILD_ROSTER_UPDATE")
+	advance(2)
+	local got = P.ns.News.Get(first.id)
+	check("an announcement published reaches the members online as it was written", got ~= nil and got.title == "Raid on the coast"
+		and got.text == body and got.link == "https://discord.com/channels/1/2/3?x=~y" and got.when == soon and got.rev == first.rev
+		and got.by == Tail(O.guid) and got.ranks == nil and got.classes == nil, got and got.text)
+	check("the members it is for are told once in the chat, its author is not", Unseen(P) == 1 and Unseen(Rh) == 1 and Unseen(O) == 0
+		and Lines(P, chatP) == 1 and Lines(Rh, chatRh) == 1 and O.ns.News.IsSeen(first) == true,
+		("%d %d %d, %d lines"):format(Unseen(P), Unseen(Rh), Unseen(O), Lines(P, chatP)))
+	check("the minimap button blinks while one waits", P.ns.MinimapButton.registered == true and P.ns.MinimapButton.blinking == true
+		and P.ns.MinimapButton.object.iconR ~= nil and P.ns.MinimapButton.object.iconR < 1.01 and O.ns.MinimapButton.blinking ~= true,
+		tostring(P.ns.MinimapButton.registered) .. " " .. tostring(P.ns.MinimapButton.blinking))
+
+	-- Whom it is for: a class, a rank, a role, a level.
+	local mages = O.ns.News.Publish({ title = "Mages, a word", when = soon + 3600, classes = { MAGE = true } })
+	local recruits = O.ns.News.Publish({ title = "Recruits' evening", when = soon + 7200, ranks = { [4] = true } })
+	local healers = O.ns.News.Publish({ title = "Healers wanted", when = soon + 9000, roles = { H = true } })
+	local veterans = O.ns.News.Publish({ title = "Level 70 only", when = soon + 9900, level = 70 })
+	advance(40)
+	check("an announcement for a class, a rank or a level is not shown nor told to the others", ShownHas(P, mages.id) and not ShownHas(Rh, mages.id)
+		and ShownHas(Rh, recruits.id) and not ShownHas(P, recruits.id) and not ShownHas(P, veterans.id) and not ShownHas(Rh, veterans.id)
+		and P.ns.News.Get(recruits.id) ~= nil and ShownHas(O, mages.id) and ShownHas(O, recruits.id) and ShownHas(O, veterans.id),
+		("%d shown to the mage, %d to the recruit"):format(#P.ns.News.Shown(), #Rh.ns.News.Shown()))
+	local inclusive = ShownHas(P, healers.id)
+	P.ns.Identity.SetRole("D")
+	local notHealer = not ShownHas(P, healers.id)
+	P.ns.Identity.SetRole("H")
+	check("an announcement for a role is told to a member who chose none, and not to one who chose another", inclusive and notHealer
+		and ShownHas(P, healers.id))
+	P.ns.Identity.SetRole(nil)
+	check("the mage has three to look at, the recruit three, the author none", Unseen(P) == 3 and Unseen(Rh) == 3 and Unseen(O) == 0,
+		("%d %d %d"):format(Unseen(P), Unseen(Rh), Unseen(O)))
+
+	-- The board opens on the announcements while one waits; looking at one
+	-- is what marks it seen.
+	local tabBefore = P.db().settings.tab
+	P.ns.UI.Show()
+	advance(1)
+	local board = P.ns.UI.Frame()
+	local tab = board.tabFrames.news
+	check("the board opens on the announcements while one waits, and keeps the tab the player chose for next time",
+		P.ns.UI.State().tab == "news" and tab ~= nil and P.db().settings.tab == tabBefore, P.ns.UI.State().tab)
+	check("the one shown first is looked at, the others still wait with a count on the tab", Unseen(P) == 2
+		and tab.selected == first.id and tab.view.title:GetText() == "Raid on the coast" and tab.view.link.url == first.link
+		and board.tabButtons.news.badge ~= nil and board.tabButtons.news.badge.count == 2 and board.tabButtons.news.badge:IsShown() == true
+		and tab.rows[1].id == first.id and tab.rows[2].mark:IsShown() == true and tab.rows[1].mark:IsShown() ~= true
+		and tab.newButton:IsShown() ~= true and tab.edit:IsShown() ~= true and tab.limit:IsShown() ~= true,
+		("%d unseen, selected %s"):format(Unseen(P), tostring(tab.selected)))
+	Click(tab.rows[2])
+	local unmarkedAtOnce = tab.rows[2].mark:IsShown() ~= true and tab.rows[3].mark:IsShown() == true
+	Click(tab.rows[3])
+	advance(2)
+	check("the one chosen is not marked as waiting, from the click on", unmarkedAtOnce)
+	check("looked at one by one, nothing waits: no count, no blinking, the button in its own colours", Unseen(P) == 0
+		and board.tabButtons.news.badge:IsShown() ~= true and P.ns.MinimapButton.blinking == false and P.ns.MinimapButton.object.iconR == 1,
+		Unseen(P))
+	P.ns.UI.Hide()
+	P.ns.UI.SelectTab("players")
+	P.ns.UI.Show()
+	check("with nothing waiting the board opens where the player left it", P.ns.UI.State().tab == "players")
+	P.ns.UI.Hide()
+
+	-- A /reload says nothing again of what was looked at; a member who has
+	-- not looked yet is reminded once at login.
+	chatP, chatRh = #P.chat, #Rh.chat
+	P.logout()
+	P.login()
+	Rh.logout()
+	Rh.login()
+	advance(30)
+	check("a login says nothing of what was looked at, and reminds once of what still waits", Lines(P, chatP) == 0 and Lines(Rh, chatRh) == 1
+		and Unseen(Rh) == 3 and Unseen(P) == 0, ("%d and %d lines"):format(Lines(P, chatP), Lines(Rh, chatRh)))
+
+	-- A member who was offline gets them from whoever holds them, the
+	-- author gone.
+	advance(60)
+	O.logout()
+	local chatQ = #Q.chat
+	Q.login()
+	local arrived = Mock.advanceUntil(function() return Q.ns.News.Get(veterans.id) ~= nil and Q.ns.News.Get(first.id) ~= nil end, 240)
+	advance(20)
+	check("a member who logs in later is handed the announcements by another member, their author offline", arrived
+		and Q.ns.News.Get(mages.id) ~= nil and Q.ns.News.Get(first.id).text == body and Unseen(Q) == 2 and Lines(Q, chatQ) >= 1
+		and Q.counter("news.wanted") >= 5, ("%s, %d unseen, %d lines"):format(tostring(arrived), Unseen(Q), Lines(Q, chatQ)))
+	-- A holder answers a member who holds less, unless another member said as
+	-- much meanwhile. Two holders whose pauses end together both answer: put
+	-- into Pia's ears, so that the order is ours.
+	local function ListsSaid(client, since)
+		local n = 0
+		for index = since + 1, #network.sent do
+			local sent = network.sent[index]
+			if sent.from == client.name and sent.channel == "GUILD" and sent.text:sub(1, 2) == "L^" then n = n + 1 end
+		end
+		return n
+	end
+	local entries = {}
+	for id, item in pairs(P.db().news[guild].items) do
+		if item.when > Mock.Server() - 86400 then entries[#entries + 1] = ("%s=%d"):format(id, item.rev) end
+	end
+	local sinceLists, suppressedThen = #network.sent, P.counter("news.answerSuppressed")
+	Hears(P, "L^0^1^1^", "Quentin Ashby")
+	Hears(P, "L^0^1^1^" .. table.concat(entries, ","), "Rhea Castellan")
+	advance(30)
+	local keptQuiet = ListsSaid(P, sinceLists) == 0 and P.counter("news.answerSuppressed") == suppressedThen + 1
+	-- What was heard is remembered for half a minute: after it, nobody said so.
+	advance(45)
+	sinceLists = #network.sent
+	Hears(P, "L^0^1^1^", "Quentin Ashby")
+	advance(30)
+	check("a holder answers a member who holds less, and keeps quiet when another member said as much meanwhile",
+		keptQuiet and ListsSaid(P, sinceLists) >= 1 and #entries >= 5 and P.counter("news.answerSuppressed") == suppressedThen + 1,
+		("%s, %d list(s) said then"):format(tostring(keptQuiet), ListsSaid(P, sinceLists)))
+
+	-- A correction: the latest writing wins, and is to look at again.
+	O.login()
+	advance(80)
+	chatP = #P.chat
+	local corrected = O.ns.News.Publish({ title = "Raid on the coast, an hour later", when = soon + 3600, text = body }, first.id)
+	advance(20)
+	check("a correction replaces the announcement and is told again", corrected.id == first.id and corrected.rev > first.rev
+		and P.ns.News.Get(first.id).title == "Raid on the coast, an hour later" and P.ns.News.Get(first.id).when == soon + 3600
+		and P.ns.News.Get(first.id).link == nil and Unseen(P) == 1 and Lines(P, chatP) == 1, Unseen(P))
+
+	-- A removal reaches the members online, and one who was offline later.
+	Q.logout()
+	local removedNow = O.ns.News.Remove(mages.id)
+	advance(20)
+	check("an announcement removed is gone from the members' boards", removedNow == true and not ShownHas(P, mages.id)
+		and P.ns.News.Get(mages.id).removed == true and not ShownHas(O, mages.id) and P.ns.News.Remove(first.id) == false)
+	O.logout()
+	Q.login()
+	local goneLater = Mock.advanceUntil(function() return Q.ns.News.Get(mages.id).removed == true end, 240)
+	check("and from the board of a member who was offline, once another member tells it", goneLater
+		and Q.ns.News.Get(first.id).title == "Raid on the coast, an hour later")
+	O.login()
+	advance(80)
+
+	-- An event that passes ends the notice, looked at or not.
+	local shortly = O.ns.News.Publish({ title = "In ten minutes", when = Mock.Server() + 600 })
+	advance(30)
+	local waiting = Unseen(P)
+	advance(700)
+	check("an event that passes ends its notice, looked at or not, and stays on the board as past", waiting == 2 and Unseen(P) == 1
+		and ShownHas(P, shortly.id) and P.ns.News.IsSeen(P.ns.News.Get(shortly.id)) == false,
+		("%d then %d"):format(waiting, Unseen(P)))
+
+	-- The player turns the telling off, and on again.
+	P.ns.News.SetNotify(false)
+	chatP = #P.chat
+	local quiet = O.ns.News.Publish({ title = "Said to the deaf", when = soon })
+	advance(20)
+	local silenced = Unseen(P) == 0 and Lines(P, chatP) == 0 and P.ns.MinimapButton.blinking == false and ShownHas(P, quiet.id)
+	P.ns.News.SetNotify(true)
+	advance(2)
+	check("a player who turned the telling off hears nothing and still finds the announcements on the board", silenced
+		and Unseen(P) == 2 and P.ns.MinimapButton.blinking == true and P.db().settings.news == true, Unseen(P))
+
+	-- The form, as the officer uses it.
+	O.ns.UI.Show()
+	O.ns.UI.SelectTab("news")
+	local oTab = O.ns.UI.Frame().tabFrames.news
+	local rowsBefore = #O.ns.News.Shown()
+	Click(oTab.newButton)
+	local form = oTab.form
+	-- Six ranks of 68 px: two, six, then three to a line.
+	local heights = {}
+	for _, wide in ipairs({ 150, 500, 250 }) do
+		form.rankHolder:SetWidth(wide)
+		form.FillRanks()
+		heights[#heights + 1] = ("%d+%d"):format(form.rankHolder:GetHeight(), form.well:GetHeight())
+	end
+	check("the lines the ranks take come out of the description's box: what follows them moves, the form keeps its height",
+		table.concat(heights, " ") == "66+71 20+117 43+94", table.concat(heights, " "))
+	form.title:SetText("Written in the form")
+	form.text:SetText("Two lines\nof it.")
+	form.link:SetText("https://discord.com/channels/9/8/7")
+	form.day:SetText("31")
+	form.month:SetText("02")
+	form.hour:SetText("21")
+	form.minute:SetText("00")
+	Click(form.publish)
+	local refusedDate = form.error:GetText() == O.ns.L.NEWS_ERROR_WHEN and #O.ns.News.Shown() == rowsBefore and form:IsShown() == true
+	local eventAt = Mock.Server() + 5 * 86400
+	form.day:SetText(os.date("%d", eventAt))
+	form.month:SetText(os.date("%m", eventAt))
+	form.hour:SetText(os.date("%H", eventAt))
+	form.minute:SetText(os.date("%M", eventAt))
+	Click(form.classButtons.ROGUE)
+	Click(form.roleButtons.T)
+	form.level:SetText("20")
+	Click(form.publish)
+	advance(20)
+	local written = O.ns.News.Get(oTab.selected)
+	local minute = eventAt - eventAt % 60
+	check("the form refuses a date that does not exist and publishes what it holds", refusedDate and written ~= nil
+		and written.title == "Written in the form" and written.text == "Two lines\nof it." and written.when == minute
+		and written.classes.ROGUE == true and written.roles.T == true and written.level == 20 and written.ranks == nil
+		and #O.ns.News.Shown() == rowsBefore + 1 and form:IsShown() ~= true and oTab.edit:IsShown() == true
+		and ShownHas(Rh, written.id) and not ShownHas(P, written.id), written and written.title)
+	Click(oTab.edit)
+	local prefilled = form.title:GetText() == "Written in the form" and form.day:GetText() == os.date("%d", eventAt)
+		and form.hour:GetText() == os.date("%H", eventAt) and form.level:GetText() == "20"
+	form.title:SetText("Written in the form, corrected")
+	Click(form.publish)
+	advance(20)
+	check("correcting from the board starts from what the announcement says", prefilled
+		and Rh.ns.News.Get(written.id).title == "Written in the form, corrected" and Rh.ns.News.Get(written.id).classes.ROGUE == true)
+	Click(oTab.remove)
+	advance(20)
+	check("and removing from the board takes it back", Rh.ns.News.Get(written.id).removed == true and not ShownHas(O, written.id))
+	O.ns.UI.Hide()
+
+	-- The first rank says who may publish; the rule gets around without it.
+	Q.logout()
+	M.login()
+	advance(80)
+	local set = M.ns.News.SetLimit(3)
+	advance(15)
+	local asMember = P.ns.News.Publish({ title = "From a member", when = soon })
+	local asRecruit = Rh.ns.News.Publish({ title = "From a recruit", when = soon })
+	advance(20)
+	local theirs = M.ns.News.Get(recruits.id)
+	check("a rank that may publish sees an announcement that is not for it, and is not told of it", theirs ~= nil
+		and M.ns.News.ForMe(theirs) == false and ShownHas(M, recruits.id) and Unseen(M) >= 1
+		and (function()
+			for _, item in ipairs(M.ns.News.Unseen()) do
+				if item.id == recruits.id then return false end
+			end
+			return true
+		end)(), Unseen(M))
+	check("the first rank names the last rank that may publish, and the guild follows", set == true and M.ns.News.Limit() == 3
+		and P.ns.News.Limit() == 3 and asMember ~= nil and asRecruit == nil and ShownHas(Rh, asMember.id) and ShownHas(O, asMember.id),
+		P.ns.News.Limit())
+	M.logout()
+	Q.login()
+	local ruled = Mock.advanceUntil(function() return Q.ns.News.Limit() == 3 end, 240)
+	advance(40)
+	check("a member who was offline gets the rule from another member, the first rank offline", ruled and ShownHas(Q, asMember.id))
+	M.login()
+	advance(80)
+	M.ns.UI.Show()
+	M.ns.UI.SelectTab("news")
+	local mTab = M.ns.UI.Frame().tabFrames.news
+	local shownLimit = mTab.limit:IsShown() == true and mTab.limit.name:GetText() == "4. Scout"
+	Click(mTab.limit.less)
+	Click(mTab.limit.less)
+	Click(mTab.limit.less)
+	advance(15)
+	check("with the right taken back, what its holders wrote shows nowhere", shownLimit and M.ns.News.Limit() == 0 and P.ns.News.Limit() == 0
+		and P.ns.News.CanPublish() == false and not ShownHas(P, first.id) and not ShownHas(Rh, asMember.id) and Unseen(Rh) == 0
+		and mTab.limit.name:GetText() == "1. Warlord", ("%s, limit %d, %d shown"):format(tostring(shownLimit), P.ns.News.Limit(), #P.ns.News.Shown()))
+	Click(mTab.limit.more)
+	advance(15)
+	check("and given back, it shows again", P.ns.News.Limit() == 1 and ShownHas(P, first.id) and not ShownHas(Rh, asMember.id))
+	M.ns.UI.Hide()
+	local ruleAt = P.db().newsRules[guild].at
+	Hears(P, ("T^%d^5^Prey"):format(ruleAt + 50), "Zaljin Darkspear")
+	Hears(P, ("T^%d^5^Prey"):format(ruleAt - 50), "Rhea Castellan")
+	Hears(P, ("T^%d^5^Prey"):format(Mock.Server() + 90000), "Rhea Castellan")
+	Hears(P, ("T^%d^25^Prey"):format(ruleAt + 60), "Rhea Castellan")
+	check("a rule said from outside the guild, older than the one held, dated ahead or naming no rank changes nothing",
+		P.ns.News.Limit() == 1 and P.db().newsRules[guild].at == ruleAt, P.ns.News.Limit())
+	-- Said on the guild channel: the first rank hears it too.
+	Hears(P, ("T^%d^3^Captain"):format(ruleAt + 70), "Rhea Castellan")
+	Hears(M, ("T^%d^3^Captain"):format(ruleAt + 70), "Rhea Castellan")
+	local limitThen, whyThen = P.ns.News.Limit()
+	check("a rule whose rank no longer carries the name it had rests: the first rank alone publishes until it is set again",
+		limitThen == 0 and whyThen == "renamed" and not ShownHas(P, first.id), tostring(limitThen) .. " " .. tostring(whyThen))
+	M.ns.News.SetLimit(1)
+	advance(15)
+	check("set again by the first rank, it holds", P.ns.News.Limit() == 1 and select(2, P.ns.News.Limit()) == nil and ShownHas(P, first.id))
+
+	-- What a member sends is not trusted: who says it, who wrote it, every field.
+	local oTail, rTail = Tail(O.guid), Tail(Rh.guid)
+	local stamp = Mock.Server()
+	local function Chunk(id, rev, payload, index, total)
+		return ("N^%s^%d^%d^%d^%s"):format(id, rev, index or 1, total or 1, payload)
+	end
+	local held = function(id) return P.ns.News.Get(id) end
+	local countedThen = { notMember = P.counter("news.notMember"), notWriter = P.counter("news.notWriter"), chunkBad = P.counter("news.chunkBad") }
+	local unseenThen = Unseen(P)
+	Hears(P, Chunk(oTail .. "." .. stamp, stamp, ("%s^%d^From outside^^^^^^"):format(oTail, soon)), "Zaljin Darkspear")
+	Hears(P, Chunk(rTail .. "." .. stamp, stamp, ("%s^%d^From a recruit^^^^^^"):format(rTail, soon)), "Rhea Castellan")
+	Hears(P, Chunk("6938-00FEED09." .. stamp, stamp, ("6938-00FEED09^%d^By a stranger^^^^^^"):format(soon)), "Rhea Castellan")
+	Hears(P, Chunk(oTail .. "." .. (stamp + 1), stamp + 1, ("%s^%d^Out of its place^^^^^^"):format(oTail, soon), 3, 2), "Rhea Castellan")
+	Hears(P, Chunk(oTail .. "." .. (stamp + 2), stamp + 2, ("%s^%d^Too many pieces^^^^^^"):format(oTail, soon), 1, 40), "Rhea Castellan")
+	Hears(P, Chunk(oTail .. "." .. (stamp + 3), stamp + 3, ("%s^%d^In ten years^^^^^^"):format(oTail, soon + 3650 * 86400)), "Rhea Castellan")
+	Hears(P, Chunk(oTail .. "." .. (stamp + 4), stamp + 90000, ("%s^%d^Written tomorrow^^^^^^"):format(oTail, soon)), "Rhea Castellan")
+	check("an announcement said from outside the guild, written by a stranger, out of bounds or dated ahead is not kept",
+		held(oTail .. "." .. stamp) == nil and held("6938-00FEED09." .. stamp) == nil and held(oTail .. "." .. (stamp + 1)) == nil
+		and held(oTail .. "." .. (stamp + 2)) == nil and held(oTail .. "." .. (stamp + 3)) == nil and held(oTail .. "." .. (stamp + 4)) == nil
+		and P.counter("news.notMember") == countedThen.notMember + 1 and P.counter("news.notWriter") == countedThen.notWriter + 1
+		and P.counter("news.chunkBad") == countedThen.chunkBad + 2 and P.counter("news.bad.when") >= 1 and P.counter("news.bad.rev") >= 1)
+	check("one written by a rank that may not publish is neither shown nor told, whoever hands it on",
+		not ShownHas(P, rTail .. "." .. stamp) and not ShownHas(O, rTail .. "." .. stamp) and Unseen(P) == unseenThen, Unseen(P))
+	-- Relayed by a member, written by the officer: kept, made plain and cut.
+	local long = ("word "):rep(200)
+	local payload = ("%s^%d^|cffff0000Red|r title^javascript:alert(1)^^^^^%s"):format(oTail, soon, long)
+	local pieces = math.ceil(#payload / 180)
+	for index = 1, pieces do
+		Hears(P, Chunk(oTail .. "." .. (stamp + 5), stamp + 5, payload:sub((index - 1) * 180 + 1, index * 180), index, pieces), "Rhea Castellan")
+	end
+	local plain = held(oTail .. "." .. (stamp + 5))
+	check("an announcement handed on by a member is kept with no escape code, no link that is not a web address, and a text cut to size",
+		plain ~= nil and not plain.title:find("|", 1, true) and plain.title:find("Red", 1, true) ~= nil and plain.link == nil
+		and #plain.text <= P.ns.News.TEXT_MAX and #plain.text > 500 and pieces >= 5, plain and plain.title)
+	Hears(P, Chunk(oTail .. "." .. (stamp + 5), stamp + 5, ("%s^%d^An older copy^^^^^^"):format(oTail, soon)), "Rhea Castellan")
+	check("a copy no newer than the one held changes nothing", held(oTail .. "." .. (stamp + 5)).title == plain.title)
+
+	-- Dates as the form reads them, and one guild's announcements are its own.
+	local News = O.ns.News
+	local later = Mock.Server() + 40 * 86400
+	local expected = os.time({ year = tonumber(os.date("%Y", later)), month = tonumber(os.date("%m", later)), day = tonumber(os.date("%d", later)),
+		hour = 20, min = 30, sec = 0 })
+	local earlier = Mock.Server() - 3 * 86400
+	local nextYear = News.When(os.date("%d", earlier), os.date("%m", earlier), 12, 0)
+	check("a day and a month name the next such date, this year or the one after, and no date that does not exist",
+		News.When(os.date("%d", later), os.date("%m", later), 20, 30) == expected and News.When(31, 2, 20, 0) == nil
+		and News.When(12, 13, 20, 0) == nil and News.When(12, 6, 24, 0) == nil and News.When("", "", "", "") == nil
+		and nextYear ~= nil and nextYear > Mock.Server() + 300 * 86400, tostring(nextYear))
+	local items = P.db().news[guild].items
+	local longGone = Tail(O.guid) .. ".1700000000"
+	items[longGone] = { id = longGone, rev = 1700000000, by = Tail(O.guid), when = Mock.Server() - 15 * 86400, title = "Long gone", text = "" }
+	local recent = Tail(O.guid) .. ".1700000001"
+	items[recent] = { id = recent, rev = 1700000001, by = Tail(O.guid), when = Mock.Server() - 5 * 86400, title = "Last week", text = "" }
+	P.logout()
+	P.login()
+	advance(20)
+	check("an event is kept two weeks after its date, then goes", P.ns.News.Get(longGone) == nil and P.ns.News.Get(recent) ~= nil
+		and ShownHas(P, recent))
+	local stores = 0
+	for name in pairs(P.db().news) do
+		stores = stores + 1
+		if name ~= guild then stores = stores + 100 end
+	end
+	check("the announcements are kept with their guild, and another guild's members hear none of them", stores == 1
+		and A.ns.News.Get(first.id) == nil and #A.ns.News.Shown() == 0 and A.counter("news.received") == 0, stores)
+	check("the tab says who an announcement is for", (function()
+		P.ns.UI.Show()
+		P.ns.UI.SelectTab("news")
+		local pTab = P.ns.UI.Frame().tabFrames.news
+		pTab.selected = first.id
+		P.ns.UI.Refresh()
+		local everyone = pTab.view.meta:GetText() or ""
+		pTab.selected = healers.id
+		P.ns.UI.Refresh()
+		local some = pTab.view.meta:GetText() or ""
+		P.ns.UI.Hide()
+		return everyone:find("Orrin Blackmoor", 1, true) ~= nil and everyone:find(P.ns.L.NEWS_FOR_ALL, 1, true) ~= nil
+			and some:find(P.ns.L.ROLE_HEALER, 1, true) ~= nil and some:find(P.ns.L.NEWS_FOR_ALL, 1, true) == nil
+	end)())
+end
+Announcements()
+
+--------------------------------------------------------------------------------
 section("Nothing went wrong anywhere")
 --------------------------------------------------------------------------------
 
@@ -4423,8 +5819,9 @@ end
 -- feed's eight last looks at its tab, about 1600 bytes, then about 2900
 -- for the guild's rule on ranks, the profile of a member who just joined
 -- and the kills and deaths that the checks of the feed's tab on request
--- and of its levels write to the journal.
-check("the saved data stays small", #Serialize(A.db()) < 32000, #Serialize(A.db()))
+-- and of its levels write to the journal. 32500 since 1.0.4: the guild's
+-- announcements (an empty store, the setting and a few counters).
+check("the saved data stays small", #Serialize(A.db()) < 32500, #Serialize(A.db()))
 check("records are stored as strings, not tables", (function()
 	for _, entry in pairs(A.db().authors[Guid(1)].log) do
 		if type(entry) ~= "string" then return false end

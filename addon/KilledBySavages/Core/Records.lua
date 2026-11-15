@@ -49,19 +49,55 @@ Records.HOW = { kb = true, pet = true, grp = true, ast = true, unk = true, bg = 
 Records.MAX_LINES = 40
 Records.BUCKET = { w = true, b = true, u = true }
 Records.PAGE = 200
+-- No journal is that long: 270 records a day for ten years. A seq or a head
+-- above it is nobody's, whoever says it, and every loop over a journal is
+-- bounded by it.
+Records.MAX_SEQ = 1000000
 local MAX_FUTURE = 300
 local MAX_LEVEL = 60
+local MAX_COUNT = 100000000     -- no lifetime count is that high
+local MAX_TEXT = 64             -- bytes of a name, a spell or a place
 
-local decoded = setmetatable({}, { __mode = "k" })
+-- Decoded records, by their text. Kept for the session on purpose: the
+-- stats hold the same tables for as long as they hold a journal's numbers.
+local decoded = {}
 
+-- A number, or nothing: neither a NaN nor an infinity ever leaves here.
 local function Num(text)
 	if text == nil or text == "" then return nil end
-	return tonumber(text)
+	local number = tonumber(text)
+	if number ~= number or number == math.huge or number == -math.huge then return nil end
+	return number
 end
 
 local function Str(text)
 	if text == nil or text == "" then return nil end
 	return text
+end
+
+-- A text another client wrote: a name, a spell, a place. Cut when it is
+-- longer than any of those can be.
+local function Text(text)
+	if text == nil or text == "" then return nil end
+	if #text > MAX_TEXT then return (Util.Cut(text, MAX_TEXT)) end
+	return text
+end
+
+-- What no honest client writes into a record (Util.Clean takes them out
+-- when encoding): the UI's escape character and control characters. The
+-- bytes are named one by one, so no locale decides what a control
+-- character is. Sync takes them out of whatever another client sends, as
+-- it comes in; here a record is only searched for the escape character,
+-- which costs next to nothing, in case it was stored before that.
+Records.UNCLEAN = "[%z\1-\31\127|]"
+
+-- The fields of a record or a profile that carries such bytes, each made
+-- plain.
+local function Plain(fields)
+	for index = 1, #fields do
+		fields[index] = fields[index]:gsub(Records.UNCLEAN, " ")
+	end
+	return fields
 end
 
 -- A character level, or nil for anything else.
@@ -88,8 +124,15 @@ local function Join(...)
 	return table.concat(fields, ";")
 end
 
+-- The fields of a record. Kills, deaths and matches have sixteen or
+-- seventeen: one pattern cuts them, faster than field by field. Anything
+-- else is cut field by field, however many it has.
+local FIELD = "([^;]*)"
+local SEVENTEEN = "^" .. FIELD .. (";" .. FIELD):rep(15) .. ";?" .. FIELD .. "$"
+
 local function Split(text)
-	local fields = {}
+	local fields = { text:match(SEVENTEEN) }
+	if fields[1] then return fields end
 	for field in (text .. ";"):gmatch("([^;]*);") do
 		fields[#fields + 1] = field
 	end
@@ -123,7 +166,7 @@ local function DecodeLines(text)
 	for piece in (text .. ","):gmatch("([^,]*),") do
 		local tail, name, kb, hk, deaths, honor = piece:match("^([^:]*):([^:]*):(%d+):(%d+):(%d+):(%d+)$")
 		if tail then
-			lines[#lines + 1] = { tail = tail ~= "" and tail or nil, name = name ~= "" and name or nil,
+			lines[#lines + 1] = { tail = tail ~= "" and tail or nil, name = Text(name),
 				kb = tonumber(kb), hk = tonumber(hk), deaths = tonumber(deaths), honor = tonumber(honor) }
 		end
 	end
@@ -145,8 +188,10 @@ function Records.EncodeCounter(r)
 end
 
 function Records.EncodeProfile(p)
+	-- "-" is a player who names no main; nothing is a version that says
+	-- nothing of it, and must stay nothing when a holder passes it on.
 	return Join("P1", p.name, p.class, p.race, p.realm, p.playerKey, p.alias, p.level, p.baselineHK, p.lifeHK, p.version, p.role,
-		p.main or "-")
+		p.main == false and "-" or p.main)
 end
 
 function Records.Encode(r)
@@ -164,21 +209,33 @@ end
 local function DecodeFields(f)
 	local kind = f[1]
 	if kind == "K1" or kind == "B1" then
-		return {
-			type = "K", backfill = kind == "B1" or nil, seq = Num(f[2]), t = Num(f[3]), bucket = Str(f[4]), how = Str(f[5]),
-			vtail = Str(f[6]), vname = Str(f[7]), vclass = Str(f[8]), vrace = Str(f[9]), vlevel = Num(f[10]),
-			mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), guild = Str(f[14]), lifeHK = Num(f[15]), sub = Str(f[16]),
-			-- Since 1.0.3, last. A rating this version does not know reads as none.
-			vcon = ns.Identity.CONS[f[17]] and f[17] or nil,
+		-- The fields nearly every kill has, then the rare ones only when they
+		-- are there: a table is sized by the fields its constructor names, and
+		-- one more than sixteen doubles it. Journals are held by the thousand.
+		local record = {
+			type = "K", seq = Num(f[2]), t = Num(f[3]), bucket = Str(f[4]), how = Str(f[5]),
+			vtail = Str(f[6]), vname = Text(f[7]), vclass = Str(f[8]), vrace = Str(f[9]), vlevel = Num(f[10]),
+			mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), guild = Text(f[14]), lifeHK = Num(f[15]),
 		}
+		if kind == "B1" then record.backfill = true end
+		local sub = Text(f[16])
+		if sub then record.sub = sub end
+		-- Since 1.0.3, last. A rating this version does not know reads as none.
+		if ns.Identity.CONS[f[17]] then record.vcon = f[17] end
+		return record
 	elseif kind == "D1" then
-		return {
+		local record = {
 			type = "D", seq = Num(f[2]), t = Num(f[3]), bucket = Str(f[4]),
-			ktail = Str(f[5]), kname = Str(f[6]), kclass = Str(f[7]), krace = Str(f[8]), kkind = Str(f[9]),
-			spell = Str(f[10]), mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), lifeHK = Num(f[14]), sub = Str(f[15]),
-			-- Since 1.0.3, last. A level out of range or an unknown rating reads as none.
-			klevel = Level(f[16]), kcon = ns.Identity.CONS[f[17]] and f[17] or nil,
+			ktail = Str(f[5]), kname = Text(f[6]), kclass = Str(f[7]), krace = Text(f[8]), kkind = Str(f[9]),
+			spell = Text(f[10]), mapID = Num(f[11]), x = Num(f[12]), y = Num(f[13]), lifeHK = Num(f[14]),
 		}
+		local sub = Text(f[15])
+		if sub then record.sub = sub end
+		-- Since 1.0.3, last. A level out of range or an unknown rating reads as none.
+		local level = Level(f[16])
+		if level then record.klevel = level end
+		if ns.Identity.CONS[f[17]] then record.kcon = f[17] end
+		return record
 	elseif kind == "M1" or kind == "C1" then
 		return {
 			type = "M", backfill = kind == "C1" or nil, seq = Num(f[2]), t = Num(f[3]), bucket = "b", instanceID = Num(f[4]), duration = Num(f[5]),
@@ -198,7 +255,9 @@ function Records.Decode(text)
 	if type(text) ~= "string" then return nil end
 	local cached = decoded[text]
 	if cached ~= nil then return cached or nil end
-	local record = DecodeFields(Split(text))
+	local fields = Split(text)
+	if text:find("|", 1, true) then Plain(fields) end
+	local record = DecodeFields(fields)
 	decoded[text] = record or false
 	return record
 end
@@ -207,6 +266,7 @@ function Records.DecodeProfile(text)
 	if type(text) ~= "string" then return nil end
 	local f = Split(text)
 	if f[1] ~= "P1" then return nil end
+	if text:find("|", 1, true) then Plain(f) end
 	-- Since 1.0.3, last: the player's main character, by its tail; false when
 	-- its player names none; nil from a version that says nothing of it.
 	local main
@@ -216,8 +276,8 @@ function Records.DecodeProfile(text)
 		main = f[13]:match("^%d+%-%x+$")
 	end
 	return {
-		name = Str(f[2]), class = Str(f[3]), race = Str(f[4]), realm = Str(f[5]), playerKey = Str(f[6]),
-		alias = Str(f[7]), level = Num(f[8]), baselineHK = Num(f[9]), lifeHK = Num(f[10]), version = Str(f[11]),
+		name = Text(f[2]), class = Text(f[3]), race = Text(f[4]), realm = Text(f[5]), playerKey = Text(f[6]),
+		alias = Text(f[7]), level = Num(f[8]), baselineHK = Num(f[9]), lifeHK = Num(f[10]), version = Text(f[11]),
 		-- Since 1.0.1, at the end: versions before read the fields by
 		-- position and never look this far.
 		role = ns.Identity.IsRole(f[12]) and f[12] or nil,
@@ -240,7 +300,7 @@ end
 -- Whether a decoded record is plausible on its own. now bounds the time.
 function Records.Validate(r, now)
 	if type(r) ~= "table" then return false, "nil" end
-	if type(r.seq) ~= "number" or r.seq < 1 or r.seq % 1 ~= 0 then return false, "seq" end
+	if type(r.seq) ~= "number" or r.seq < 1 or r.seq > Records.MAX_SEQ or r.seq % 1 ~= 0 then return false, "seq" end
 	if type(r.t) ~= "number" or r.t < 1 then return false, "time" end
 	if now and r.t > now + MAX_FUTURE then return false, "future" end
 	if r.type == "K" then
@@ -251,19 +311,19 @@ function Records.Validate(r, now)
 		if r.vclass ~= nil and not IsToken(r.vclass) then return false, "class" end
 		if r.vrace ~= nil and not IsToken(r.vrace) then return false, "race" end
 		if r.vlevel ~= nil and (r.vlevel < 1 or r.vlevel > MAX_LEVEL) then return false, "level" end
-		if type(r.lifeHK) ~= "number" or r.lifeHK < 0 then return false, "lifeHK" end
+		if type(r.lifeHK) ~= "number" or r.lifeHK < 0 or r.lifeHK > MAX_COUNT then return false, "lifeHK" end
 	elseif r.type == "D" then
 		if not Records.BUCKET[r.bucket] or r.bucket == "u" then return false, "bucket" end
 		if r.kkind ~= "p" and r.kkind ~= "e" then return false, "killer" end
 		if r.ktail ~= nil and not IsTail(r.ktail) then return false, "killer" end
 		if r.kclass ~= nil and not IsToken(r.kclass) then return false, "class" end
-		if type(r.lifeHK) ~= "number" or r.lifeHK < 0 then return false, "lifeHK" end
+		if type(r.lifeHK) ~= "number" or r.lifeHK < 0 or r.lifeHK > MAX_COUNT then return false, "lifeHK" end
 	elseif r.type == "M" then
 		if type(r.hk) ~= "number" or r.hk < 0 or r.hk > 500 then return false, "hk" end
 		if type(r.kb) ~= "number" or r.kb < 0 or r.kb > 200 then return false, "kb" end
 		if type(r.deaths) ~= "number" or r.deaths < 0 or r.deaths > 200 then return false, "deaths" end
 		if type(r.live) ~= "number" or r.live < 0 or r.live > r.hk then return false, "live" end
-		if type(r.lifeHK) ~= "number" or r.lifeHK < 0 then return false, "lifeHK" end
+		if type(r.lifeHK) ~= "number" or r.lifeHK < 0 or r.lifeHK > MAX_COUNT then return false, "lifeHK" end
 		if #(r.lines or {}) > Records.MAX_LINES then return false, "lines" end
 		for _, line in ipairs(r.lines or {}) do
 			if line.tail ~= nil and not IsTail(line.tail) then return false, "lines" end
@@ -272,6 +332,7 @@ function Records.Validate(r, now)
 	elseif r.type == "X" then
 		if not Records.BUCKET[r.bucket] then return false, "bucket" end
 		if type(r.fromHK) ~= "number" or type(r.toHK) ~= "number" or r.toHK <= r.fromHK then return false, "range" end
+		if r.fromHK < 0 or r.toHK > MAX_COUNT then return false, "range" end
 	else
 		return false, "type"
 	end
@@ -296,6 +357,16 @@ local MATCH_TOLERANCE = 120
 function Records.SameMatch(a, b)
 	if a.instanceID ~= b.instanceID then return false end
 	return math.abs((a.t or 0) - (b.t or 0)) <= MATCH_TOLERANCE
+end
+
+-- Whether a match record was written with no scoreboard read: the counter's
+-- delta at leaving, or what the journal held of a match nothing closed. It
+-- knows its author's honorable kills and the deaths the journal wrote: no
+-- killing blow, no honor, no teammate. A scoreboard written by hand
+-- (instance 0) and a backfilled match are scoreboards.
+function Records.NoScoreboard(r)
+	return r.type == "M" and r.instanceID ~= 0 and not r.backfill and r.damage == nil and r.healing == nil
+		and (r.kb or 0) == 0 and (r.honor or 0) == 0 and (r.lines == nil or #r.lines == 0)
 end
 
 -- The lifetime count a record leaves behind.
@@ -339,9 +410,104 @@ function Records.Author(guid)
 	if not author then
 		author = { head = 0, count = 0, log = {}, pages = {}, missing = {} }
 		authors[guid] = author
+		-- A member's journal counts from the start, before its first record.
+		Records.Rescope()
 	end
 	return author
 end
+
+--------------------------------------------------------------------------------
+-- The journals of the guild
+--
+-- The saved data is the account's: it holds the journals of every guild
+-- any of its characters plays in, and of members who left. Only those of
+-- the guild played now count on the board and are handed to its members.
+-- A journal is the guild's when its character is in the roster; else the
+-- guild it was last seen in is kept with it (a member who left stays the
+-- guild's), and a journal never seen in a roster goes by the guild its
+-- last kill names. Out of a guild, the character played has its own alone.
+-- A journal belongs to one guild at a time: that of its character.
+--------------------------------------------------------------------------------
+
+local GUILD_LOOK = 400           -- how far back from its head a journal is read for a kill that names a guild
+local scope                      -- guid -> true, for the guild played now
+local unnamed = {}               -- guid -> the head at which no kill of the journal named a guild
+
+-- The guild of a journal: its name, false for none, nil when nothing says.
+local function GuildOf(guid, author)
+	local Identity = ns.Identity
+	local me = Identity.me
+	local playing = Identity.InGuild() and me.guild or false
+	if guid == me.guid or (playing and Identity.MemberByTail(Util.Tail(guid))) then
+		author.guild = playing
+		return playing
+	end
+	if author.guild ~= nil then return author.guild end
+	local head = author.head or 0
+	if unnamed[guid] == head then return nil end
+	for seq = head, math.max(1, head - GUILD_LOOK), -1 do
+		local record = Records.Get(guid, seq)
+		if record and record.type == "K" and record.guild then
+			author.guild = record.guild
+			return author.guild
+		end
+	end
+	unnamed[guid] = head
+	return nil
+end
+
+function Records.Scope()
+	if scope then return scope end
+	scope = {}
+	local me = ns.Identity.me
+	local playing = ns.Identity.InGuild() and me.guild or nil
+	for guid, author in pairs(ns.db.authors) do
+		local guild = GuildOf(guid, author)
+		if guid == me.guid or (playing and guild == playing) then scope[guid] = true end
+	end
+	return scope
+end
+
+function Records.InGuild(guid)
+	return Records.Scope()[guid] == true
+end
+
+-- Whether a journal is known to be another guild's. One nothing says the
+-- guild of is not: it is not counted, and is still asked for, since the
+-- page that names its guild may be the next one.
+function Records.Foreign(guid)
+	if Records.Scope()[guid] then return false end
+	local author = ns.db.authors[guid]
+	return author ~= nil and author.guild ~= nil
+end
+
+-- The roster, the guild or the journals held changed: the set is made
+-- again, and whoever keeps numbers of it is told when it is another.
+function Records.Rescope()
+	local before = scope
+	if not before or not ns.db then
+		scope = nil
+		return
+	end
+	scope = nil
+	local now = Records.Scope()
+	local same = true
+	for guid in pairs(before) do
+		if not now[guid] then same = false end
+	end
+	for guid in pairs(now) do
+		if not before[guid] then same = false end
+	end
+	if not same then ns.Fire("ScopeChanged") end
+end
+
+ns.Hook("RosterUpdated", Records.Rescope)
+ns.Hook("GuildChanged", Records.Rescope)
+ns.Hook("JournalChanged", Records.Rescope)
+ns.Hook("Login", Records.Rescope)
+-- The client can be late saying who we are and in which guild: looked at
+-- again once the world is there.
+ns.Hook("EnteringWorld", Records.Rescope)
 
 --------------------------------------------------------------------------------
 -- Packed pages
@@ -417,18 +583,95 @@ function Records.Has(author, seq)
 	return author.pages ~= nil and author.pages[PageOf(seq)] ~= nil
 end
 
--- Every record of an author, decoded, in seq order (holes skipped).
+-- A journal with far more room than records: the newest page of a long
+-- one fetched first, or a head nobody could have earned. It is walked by
+-- what it holds, in seq order, whatever its head says.
+local SPARSE_SLACK = 1000
+local function EachSparse(author, head, fn)
+	ns.Count("records.walkedSparse")
+	local seqs = {}
+	for seq in pairs(author.log) do
+		if type(seq) == "number" and seq <= head then seqs[#seqs + 1] = seq end
+	end
+	for page in pairs(author.pages or {}) do
+		local lines = Records.UnpackPage(author, page)
+		for seq in pairs(lines or {}) do
+			if seq <= head and not author.log[seq] then seqs[#seqs + 1] = seq end
+		end
+	end
+	table.sort(seqs)
+	for index = 1, #seqs do
+		local seq = seqs[index]
+		local text = author.log[seq]
+		if not text then
+			local lines = Records.UnpackPage(author, PageOf(seq))
+			text = lines and lines[seq]
+		end
+		local record = text and Records.Decode(text)
+		if record then fn(record, text, seq) end
+	end
+end
+
+-- Every record of an author, decoded, in seq order (holes skipped). Page
+-- by page: a packed page is unpacked once, and each seq costs one lookup.
 function Records.Each(guid, fn)
 	local author = ns.db.authors[guid]
 	if not author then return end
-	for seq = 1, author.head or 0 do
-		local text = Records.Line(guid, seq)
-		if text then
-			local record = Records.Decode(text)
-			if record then fn(record, text, seq) end
+	local head = author.head or 0
+	if head < 1 then return end
+	if head > (author.count or 0) * 4 + SPARSE_SLACK then return EachSparse(author, head, fn) end
+	local log, pages, size = author.log, author.pages, Records.PAGE
+	for page = 1, PageOf(head) do
+		local packed = pages and pages[page] and Records.UnpackPage(author, page) or nil
+		local last = page * size
+		if last > head then last = head end
+		for seq = (page - 1) * size + 1, last do
+			local text = log[seq] or (packed and packed[seq])
+			if text then
+				local record = decoded[text]
+				if record == nil then record = Records.Decode(text) end
+				if record then fn(record, text, seq) end
+			end
 		end
 	end
 end
+
+-- The head and the count of a journal, from what it holds: after a purge,
+-- or when the saved data says something no journal can be. A packed page
+-- is complete by construction.
+function Records.Recount(author)
+	local head, count = 0, 0
+	for seq in pairs(author.log) do
+		if type(seq) == "number" and seq >= 1 and seq <= Records.MAX_SEQ and seq % 1 == 0 then
+			count = count + 1
+			if seq > head then head = seq end
+		else
+			author.log[seq] = nil
+		end
+	end
+	for page in pairs(author.pages or {}) do
+		local _, last = Records.PageRange(page)
+		count = count + Records.PAGE
+		if last > head then head = last end
+	end
+	author.head, author.count = head, count
+	return head, count
+end
+
+-- Saved data is taken as it is, but for a head no journal can have: loops
+-- run up to it.
+ns.Hook("Init", function()
+	for _, author in pairs(ns.db.authors) do
+		if type(author) == "table" then
+			if type(author.log) ~= "table" then author.log = {} end
+			local head = author.head
+			if type(head) ~= "number" or head < 0 or head > Records.MAX_SEQ or head % 1 ~= 0 then
+				Records.Recount(author)
+				ns.Count("records.headRepaired")
+			end
+		end
+	end
+end)
 
 -- Packs one complete page of an author. Returns true when done.
 function Records.PackPage(guid, page)
@@ -443,7 +686,8 @@ function Records.PackPage(guid, page)
 		if not text then return false end
 		lines[#lines + 1] = text
 	end
-	local raw = deflate:CompressDeflate(table.concat(lines, "\n"), { level = 9 })
+	-- Level 5: half the time of the highest level for two percent more bytes.
+	local raw = deflate:CompressDeflate(table.concat(lines, "\n"), { level = 5 })
 	author.pages = author.pages or {}
 	author.pages[page] = deflate:EncodeForPrint(raw)
 	for seq = from, to do
@@ -453,9 +697,10 @@ function Records.PackPage(guid, page)
 	return true
 end
 
--- Packs every complete page whose records are all older than a time, for
--- every author. Returns the number of pages packed.
-function Records.Compact(olderThan)
+-- Packs the complete pages whose records are all older than a time, for
+-- every author: all of them, or a number of them at most. Returns the
+-- number of pages packed.
+function Records.Compact(olderThan, limit)
 	local packed = 0
 	for guid, author in pairs(ns.db.authors) do
 		local lastPage = PageOf(math.max(author.head or 0, 1)) - 1
@@ -465,6 +710,10 @@ function Records.Compact(olderThan)
 				local last = author.log[to] and Records.Decode(author.log[to])
 				if last and type(last.t) == "number" and last.t < olderThan and Records.PackPage(guid, page) then
 					packed = packed + 1
+					if limit and packed >= limit then
+						ns.Count("records.packed", packed)
+						return packed
+					end
 				end
 			end
 		end
@@ -499,13 +748,40 @@ function Records.Store(guid, seq, text, source)
 	author.count = (author.count or 0) + 1
 	if seq > (author.head or 0) then author.head = seq end
 	if source ~= "author" then author.relayed = (author.relayed or 0) + 1 end
+	-- A journal no roster ever named goes by its kills: this record may be
+	-- the one that says whose guild it is.
+	if author.guild == nil and scope and not scope[guid] then Records.Rescope() end
 	return true, "added"
 end
 
 -- While Sync recovers the records a crash lost, new ones wait unnumbered:
--- their seq must come after the recovered head.
+-- their seq must come after the recovered head. They are saved with the
+-- character while they wait: a /reload then must not lose them.
 local held = {}
 local holding = false
+
+local function KeepHeld()
+	local me = ns.Identity.me
+	if me.guid then ns.Db.Character(me.guid).held = #held > 0 and held or nil end
+end
+
+-- The records the last session left waiting, back in their order. Returns
+-- how many.
+function Records.RestoreHeld()
+	local me = ns.Identity.me
+	if not me.guid then return 0 end
+	local saved = ns.Db.Character(me.guid).held
+	if type(saved) == "table" then
+		for _, record in ipairs(saved) do
+			if type(record) == "table" and type(record.type) == "string" then
+				record.seq = nil
+				held[#held + 1] = record
+			end
+		end
+	end
+	KeepHeld()
+	return #held
+end
 
 -- HoldOwn(false) stops holding without appending what waits: ReleaseOwn
 -- does that, once whatever must come first is in.
@@ -517,6 +793,7 @@ function Records.ReleaseOwn()
 	holding = false
 	local list = held
 	held = {}
+	KeepHeld()
 	for _, record in ipairs(list) do
 		Records.AppendOwn(record)
 	end
@@ -533,6 +810,7 @@ function Records.AppendOwn(record, source)
 	if not me.guid then return nil end
 	if holding then
 		held[#held + 1] = record
+		KeepHeld()
 		return nil
 	end
 	local author = Records.Author(me.guid)

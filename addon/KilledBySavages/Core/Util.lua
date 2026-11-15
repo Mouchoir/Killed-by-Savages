@@ -40,6 +40,13 @@ Util.Safe = Safe
 local function SafeAll(ok, ...)
 	if not ok then return nil end
 	local count = select("#", ...)
+	-- Nearly every call gives one value or two: no table for those.
+	if count == 0 then return end
+	if count == 1 then return Safe((...)) end
+	if count == 2 then
+		local first, second = ...
+		return Safe(first), Safe(second)
+	end
 	local values = {}
 	for index = 1, count do
 		values[index] = Safe((select(index, ...)))

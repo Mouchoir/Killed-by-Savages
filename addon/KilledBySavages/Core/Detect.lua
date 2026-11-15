@@ -26,10 +26,14 @@ ns.Detect = Detect
 
 local MATCH_WINDOW = 2        -- seconds between an enemy's death and the HK it gave
 local MATCH_DELAY = 3         -- an HK is matched this long after it, once all is in
+local GROUP_SPAN = 4          -- HK events matched together span this many seconds at most
 local RING_SECONDS = 90       -- how long kills and deaths seen are kept around
 local RECAP_DELAYS = { 0.5, 1, 1.5, 3, 4 }
 local JUMP_DELAY = 1          -- a counter jump at login waits this long for a recovery
 local DEATH_WINDOW = 3        -- a second PLAYER_DEAD this soon after one is the same death
+local MATCH_MAX_AGE = 4 * 3600 -- a match entered longer ago is not the one a /reload comes back to
+local MATCH_SHUT = 150        -- a battleground shuts two minutes after its end: what follows a match record this soon is that match's
+local LOST_DELAY = 8          -- seconds after login before what no match record closed is closed: by then the client says where we are
 
 local recentKills = {}        -- PARTY_KILL on players, newest last
 local recentDeaths = {}       -- UNIT_DIED on players, newest last
@@ -226,12 +230,126 @@ function Detect.MatchPending(pending)
 	return results
 end
 
+-- HK events that follow each other within the window share the deaths
+-- around them: two enemies who die a second apart give two events, and each
+-- alone sees two deaths for its one HK and names neither. Together they are
+-- what one event of two HKs is: as many deaths as HKs name them all, more
+-- deaths than HKs name none. Each kill or death goes to the earliest event
+-- of the group that is within the window of it and still has an HK to
+-- name; an HK left over has no victim. Returns the results of each event.
+local function MatchGroup(group)
+	local low, high = group[1].clock, group[#group].clock
+	local free, out, total = {}, {}, 0
+	for index, pending in ipairs(group) do
+		free[index], out[index] = pending.count, {}
+		total = total + pending.count
+	end
+	local function Place(clock, result)
+		for index, pending in ipairs(group) do
+			if free[index] > 0 and math.abs(clock - pending.clock) <= MATCH_WINDOW then
+				free[index] = free[index] - 1
+				out[index][#out[index] + 1] = result
+				return true
+			end
+		end
+		return false
+	end
+	local function Within(ring)
+		local found = {}
+		for _, item in ipairs(ring) do
+			if item.clock >= low - MATCH_WINDOW and item.clock <= high + MATCH_WINDOW then found[#found + 1] = item end
+		end
+		return found
+	end
+	local kills = Within(recentKills)
+	table.sort(kills, function(a, b)
+		local rankA = (a.role == "me" or a.role == "mypet") and 1 or 2
+		local rankB = (b.role == "me" or b.role == "mypet") and 1 or 2
+		if rankA ~= rankB then return rankA < rankB end
+		return a.clock < b.clock
+	end)
+	local killed, named = {}, 0
+	for _, kill in ipairs(kills) do
+		killed[kill.guid] = true
+		if not kill.matched and Place(kill.clock, { how = HOW_BY_ROLE[kill.role], facts = kill.facts }) then
+			kill.matched = true
+			named = named + 1
+		end
+	end
+	if total > named then
+		local deaths = {}
+		for _, death in ipairs(Within(recentDeaths)) do
+			if not death.matched and IsEnemyDeath(death, killed) then deaths[#deaths + 1] = death end
+		end
+		if #deaths > total - named then
+			-- More enemies died than HKs came: not guessed.
+			ns.Count("detect.ambiguous")
+		else
+			table.sort(deaths, function(a, b) return a.clock < b.clock end)
+			for _, death in ipairs(deaths) do
+				if Place(death.clock, { how = "ast", facts = death.facts }) then death.matched = true end
+			end
+		end
+	end
+	for index in ipairs(group) do
+		for _ = 1, free[index] do out[index][#out[index] + 1] = { how = "unk" } end
+	end
+	return out
+end
+
+local waiting = {}            -- an HK event -> the earlier ones that wait to be matched with it
+
 local function Resolve(pending)
 	local list = ns.db.pending
-	for index = #list, 1, -1 do
-		if list[index] == pending then table.remove(list, index) end
+	local group = waiting[pending] or {}
+	waiting[pending] = nil
+	group[#group + 1] = pending
+	-- An event that came within the window after this one is matched with
+	-- it, when its own turn comes: everything around both is in by then.
+	local later
+	for _, other in ipairs(list) do
+		if other ~= pending and other.guid == pending.guid and other.bucket == pending.bucket and type(other.clock) == "number"
+			and other.clock >= pending.clock and other.clock - pending.clock <= MATCH_WINDOW
+			and other.clock - group[1].clock <= GROUP_SPAN and (not later or other.clock < later.clock) then
+			local mine = false
+			for _, one in ipairs(group) do
+				if one == other then mine = true end
+			end
+			if not mine then later = other end
+		end
 	end
-	Detect.MatchPending(pending)
+	if later then
+		local with = waiting[later] or {}
+		for _, one in ipairs(group) do with[#with + 1] = one end
+		waiting[later] = with
+		ns.Count("detect.waited")
+		return
+	end
+	for index = #list, 1, -1 do
+		for _, one in ipairs(group) do
+			if list[index] == one then
+				table.remove(list, index)
+				break
+			end
+		end
+	end
+	if #group == 1 then
+		Detect.MatchPending(pending)
+		return
+	end
+	-- In the order they came: the journal's chain runs through them.
+	table.sort(group, function(a, b)
+		if a.clock ~= b.clock then return a.clock < b.clock end
+		return a.lifeHK < b.lifeHK
+	end)
+	local out = MatchGroup(group)
+	for index, one in ipairs(group) do
+		for place, result in ipairs(out[index]) do
+			Records.AppendOwn(KillRecord(one, result.how, result.facts, place))
+			ns.Count("detect.how." .. result.how)
+		end
+	end
+	ns.Count("detect.grouped")
 end
 
 --------------------------------------------------------------------------------
@@ -272,7 +390,7 @@ function Detect.OnKillsChanged()
 	end
 	local pending = {
 		t = Util.Now(), clock = Util.Clock(), bucket = bucket, count = delta, lifeHK = lifeHK,
-		guild = Identity.me.guild, pos = Util.Position(),
+		guild = Identity.me.guild, pos = Util.Position(), guid = Identity.me.guid,
 	}
 	local list = ns.db.pending
 	list[#list + 1] = pending
@@ -281,14 +399,22 @@ end
 
 -- HKs left unmatched by a /reload or a crash become kills with no victim;
 -- the kill events around them are gone.
+-- In the order they came, or the journal's chain would run backwards. The
+-- list is the account's: an HK another character left waiting is its own
+-- to settle, at its next login.
 local function ResolvePending()
 	local list = ns.db.pending
-	for index = #list, 1, -1 do
-		local pending = list[index]
-		table.remove(list, index)
-		pending.clock = -RING_SECONDS * 10
-		Detect.MatchPending(pending)
-		ns.Count("detect.pendingAtLogin")
+	local mine = Identity.me.guid
+	local others = {}
+	ns.db.pending = others
+	for _, pending in ipairs(list) do
+		if pending.guid == nil or pending.guid == mine then
+			pending.clock = -RING_SECONDS * 10
+			Detect.MatchPending(pending)
+			ns.Count("detect.pendingAtLogin")
+		else
+			others[#others + 1] = pending
+		end
 	end
 end
 
@@ -303,12 +429,58 @@ function Detect.ResolveJump(fromHK, toHK)
 	local char = Char()
 	if not char.jump or char.jump.from ~= fromHK or char.jump.to ~= toHK then return end
 	char.jump = nil
-	Records.AppendOwn({ type = "X", t = Util.Now(), bucket = "u", fromHK = fromHK, toHK = toHK })
-	ns.Count("detect.jump")
+	-- The counter record goes first, then the records that waited behind
+	-- the jump. It starts where the journal stands: after a /reload during
+	-- a recovery, what the guild gave back is in the journal already.
+	Records.HoldOwn(false)
+	local stand = Detect.Stand()
+	if stand and stand > fromHK then fromHK = stand end
+	if toHK > fromHK then
+		Records.AppendOwn({ type = "X", t = Util.Now(), bucket = "u", fromHK = fromHK, toHK = toHK })
+		ns.Count("detect.jump")
+	end
+	Records.ReleaseOwn()
+end
+
+-- The lifetime count our own journal stands at: what its last record
+-- leaves. nil for an empty journal.
+function Detect.Stand()
+	local guid = Identity.me.guid
+	local author = guid and ns.db.authors[guid]
+	local last = author and (author.head or 0) > 0 and Records.Get(guid, author.head) or nil
+	local after = last and Records.LifeAfter(last)
+	return type(after) == "number" and after or nil
+end
+
+-- The match a battleground puts us in. It is saved with the character: a
+-- /reload during the match comes back to it, with the HKs it already wrote
+-- as kills, or the match record would count them again and break the
+-- journal's chain. Only when nothing says otherwise: the same battleground,
+-- entered lately, and a counter that did not move while we were away.
+local function EnterMatch(lifeHK, resume)
+	local char = Char()
+	local instanceName, _, _, _, _, _, _, instanceID = Get(GetInstanceInfo)
+	instanceID = type(Safe(instanceID)) == "number" and Safe(instanceID) or nil
+	local saved = char.match
+	if resume and type(saved) == "table" and saved.instanceID == instanceID and type(saved.live) == "number"
+		and type(saved.lifeHK) == "number" and type(saved.at) == "number" and Util.Now() - saved.at < MATCH_MAX_AGE then
+		bgEntry = saved
+		ns.Count("detect.bgResumed")
+	else
+		bgEntry = { lifeHK = lifeHK, at = Util.Now(), name = Safe(instanceName), instanceID = instanceID, live = 0 }
+	end
+	char.match = bgEntry
 end
 
 function Detect.Start()
 	if started then return end
+	-- The client can be a moment late saying who we are.
+	if not Identity.me.guid then Identity.Refresh() end
+	if not Identity.me.guid then
+		ns.Count("detect.noGuidAtLogin")
+		Util.After(10, "detect-start", Detect.Start)
+		return
+	end
 	local char = Char()
 	local lifeHK = Detect.ReadLifeHK()
 	if lifeHK == nil then
@@ -321,35 +493,73 @@ function Detect.Start()
 	-- A journal still empty takes what the probe recorded before the addon
 	-- existed; it sets the baseline itself.
 	if ns.Import then Util.Guard("import", ns.Import.AtLogin, lifeHK) end
+	-- A jump the last session saw and did not settle (a /reload while the
+	-- guild was asked for the lost records) is still owed, unless the
+	-- journal has moved past it since. The records that waited behind it
+	-- were saved with the character: they wait again, and what follows
+	-- queues behind them, in its order.
+	local owed = type(char.jump) == "table" and type(char.jump.from) == "number" and type(char.jump.to) == "number"
+		and char.jump.to > char.jump.from and char.jump or nil
+	local stand = Detect.Stand()
+	if owed and stand and stand >= owed.to then owed = nil end
+	if not owed then char.jump = nil end
+	if Records.RestoreHeld() > 0 or owed then Records.HoldOwn() end
 	-- HKs left unmatched by the last session belong before anything the
 	-- counter did since: they are settled first. Then the journal is
 	-- repaired where an older version broke its own chain.
 	ResolvePending()
+	if not owed then Records.ReleaseOwn() end
 	Records.HealOwn()
+	local moved = type(char.lifeHK) == "number" and lifeHK ~= char.lifeHK
 	if char.baselineHK == nil then
 		-- First run on this character: everything before is not ours to count.
 		char.baselineHK = lifeHK
 		char.lifeHK = lifeHK
 		ns.Count("detect.baseline")
-	elseif type(char.lifeHK) == "number" and lifeHK > char.lifeHK then
-		char.jump = { from = char.lifeHK, to = lifeHK, at = Util.Now() }
-		-- Sync may take the jump over (Detect.DeferJump) to recover the lost
-		-- records from the guild before a counter record is written.
-		ns.Fire("CounterJump", char.lifeHK, lifeHK)
-		if char.jump and not char.jump.deferred then
-			Util.After(JUMP_DELAY, "jump", Detect.ResolveJump, char.lifeHK, lifeHK)
+	else
+		local lost = type(char.lifeHK) == "number" and lifeHK > char.lifeHK
+		if owed and lost then
+			-- Two gaps. The first is settled at once, by a counter record and
+			-- the records that waited; the second goes the usual way.
+			Detect.ResolveJump(owed.from, owed.to)
+			owed = nil
+		end
+		if owed then
+			char.jump = { from = owed.from, to = owed.to, at = Util.Now() }
+			ns.Count("detect.jumpOwed")
+			ns.Fire("CounterJump", owed.from, owed.to)
+			if char.jump and not char.jump.deferred then
+				Util.After(JUMP_DELAY, "jump", Detect.ResolveJump, owed.from, owed.to)
+			end
+		elseif lost then
+			char.jump = { from = char.lifeHK, to = lifeHK, at = Util.Now() }
+			-- Sync may take the jump over (Detect.DeferJump) to recover the lost
+			-- records from the guild before a counter record is written.
+			ns.Fire("CounterJump", char.lifeHK, lifeHK)
+			if char.jump and not char.jump.deferred then
+				Util.After(JUMP_DELAY, "jump", Detect.ResolveJump, char.lifeHK, lifeHK)
+			end
 		end
 	end
 	char.lifeHK = lifeHK
 	Records.OwnProfile()
 	inBattleground = Util.Bucket() == "bg"
+	local saved = char.match
 	if inBattleground and not bgEntry then
-		local instanceName, _, _, _, _, _, _, instanceID = Get(GetInstanceInfo)
-		bgEntry = {
-			lifeHK = lifeHK, at = Util.Now(), name = Safe(instanceName),
-			instanceID = type(Safe(instanceID)) == "number" and Safe(instanceID) or nil, live = 0,
-		}
+		EnterMatch(lifeHK, not moved)
+	elseif not inBattleground then
+		char.match = nil
 	end
+	-- What the last session wrote inside a battleground and no match record
+	-- closed counts nowhere: it is closed a moment from now, unless it may be
+	-- of the match we are in then (the same battleground, entered lately; a
+	-- version before 1.0.4 saved no match, and says nothing either way).
+	Util.After(LOST_DELAY, "lost-match", function()
+		local entry = inBattleground and bgEntry or nil
+		local mayBeOurs = entry ~= nil and (type(saved) ~= "table" or (saved.instanceID == entry.instanceID
+			and type(saved.at) == "number" and Util.Now() - saved.at < MATCH_MAX_AGE))
+		Detect.CloseLostMatches(mayBeOurs, saved)
+	end)
 end
 
 -- Sync calls this from the CounterJump hook to handle the jump itself: it
@@ -505,6 +715,96 @@ local function ReadScoreboard()
 	return mine, lines
 end
 
+--------------------------------------------------------------------------------
+-- Matches no record closed
+--
+-- The board counts a battleground from its match record alone. A match left
+-- without one (a logout or a disconnection inside it and a way back in the
+-- world, a counter that could not be read at leaving) wrote its HKs as kills
+-- and its deaths, and they counted nowhere. Such a run of battleground
+-- records, ended by the world's or by the end of the journal, is closed by a
+-- match record that says what the journal itself holds and no more: the
+-- kills written, the deaths written, no killing blow. It adds nothing to
+-- the chain. A run a match record follows is left alone, whatever that
+-- record says it holds: the scoreboard had the whole match. So is one with
+-- no kill: a battleground that gave nothing records nothing.
+--------------------------------------------------------------------------------
+
+-- The battleground records of our journal after a seq, as runs. Returns
+-- those the world's records end, and the one the journal ends on, if any.
+local function MatchRuns(guid, after, head)
+	local lost, run, lastDeath, shutAt = {}, nil, nil, nil
+	for seq = after + 1, head do
+		local record = Records.Get(guid, seq)
+		if record and record.type == "M" then
+			-- A scoreboard, read then or taken from the probe's data since.
+			run, shutAt = nil, record.t
+		elseif record and not record.backfill then
+			if (record.type == "K" or record.type == "D") and record.bucket == "b" then
+				-- A kill or a death written as the battleground shuts is of
+				-- the match whose scoreboard was just read.
+				if run or not (shutAt and record.t <= shutAt + MATCH_SHUT) then
+					run = run or { first = seq, from = record.t, to = record.t, kills = 0, deaths = 0 }
+					if record.t > run.to then run.to = record.t end
+					if record.type == "K" then
+						run.kills = run.kills + 1
+					else
+						-- A journal from before 0.1.13 can hold a death twice in a row.
+						local key = record.ktail or record.kname
+						if not (lastDeath and key == lastDeath.key and math.abs(record.t - lastDeath.t) <= DEATH_WINDOW) then
+							run.deaths = run.deaths + 1
+						end
+						lastDeath = { key = key, t = record.t }
+					end
+				end
+			else
+				if run then lost[#lost + 1] = run end
+				run, shutAt = nil, nil
+			end
+		end
+	end
+	return lost, run
+end
+
+-- Where the last look at our journal stopped, and the journal.
+local function Looked()
+	local guid = Identity.me.guid
+	local author = guid and ns.db.authors[guid]
+	if not author or (author.head or 0) == 0 then return nil end
+	local looked = Char().matchLook
+	if type(looked) ~= "number" or looked < 0 or looked > author.head or looked % 1 ~= 0 then looked = 0 end
+	return guid, author, looked
+end
+
+-- Closes the runs no match record closed. With open, the run the journal
+-- ends on may be of the match we are in, and waits. entry is the match the
+-- journal's last run was written in, when one is known: it names the
+-- battleground. Returns how many match records were written.
+function Detect.CloseLostMatches(open, entry)
+	local guid, author, looked = Looked()
+	if not guid then return 0 end
+	local head = author.head
+	local lost, last = MatchRuns(guid, looked, head)
+	if last and not open then
+		lost[#lost + 1] = last
+		last = nil
+	end
+	local closed = 0
+	for _, run in ipairs(lost) do
+		if run.kills > 0 then
+			local known = type(entry) == "table" and type(entry.at) == "number" and run.from >= entry.at
+			Records.AppendOwn({
+				type = "M", t = run.to, instanceID = known and entry.instanceID or nil, duration = run.to - run.from,
+				hk = run.kills, kb = 0, deaths = run.deaths, honor = 0, live = run.kills, lifeHK = Detect.Stand() or lastHK or 0,
+			}, "closed")
+			closed = closed + 1
+			ns.Count("detect.bgMatchLost")
+		end
+	end
+	Char().matchLook = last and (last.first - 1) or head
+	return closed
+end
+
 local function WriteMatch(entry, mine, lines, lifeHK)
 	local pos = Util.Position()
 	Records.AppendOwn({
@@ -541,33 +841,49 @@ function Detect.OnMatchComplete(winner)
 	Util.After(SCORE_DELAYS[1], "scoreboard", TryScoreboard, bgEntry, 1)
 end
 
-function Detect.OnEnteringWorld()
+function Detect.OnEnteringWorld(isLogin, isReload)
+	-- Before the counter could be read at login nothing is tracked: Start
+	-- looks at where we are when it runs, and may come back to a match.
+	if not started then return end
 	local now = Util.Bucket() == "bg"
-	if now and not inBattleground then
-		inBattleground = true
-		local instanceName, _, _, _, _, _, _, instanceID = Get(GetInstanceInfo)
-		bgEntry = {
-			lifeHK = Detect.ReadLifeHK() or lastHK, at = Util.Now(), name = Safe(instanceName),
-			instanceID = type(Safe(instanceID)) == "number" and Safe(instanceID) or nil, live = 0,
-		}
-		recentKills, recentDeaths = {}, {}
-		ns.Count("detect.bgEnter")
-	elseif not now and inBattleground then
+	-- From one battleground straight into another (the next queue taken
+	-- inside a finished match): the first is left, as on the way through
+	-- the world, or the second would have no match of its own.
+	local another = now and inBattleground and not isLogin and not isReload
+	if inBattleground and (another or not now) then
 		inBattleground = false
 		local lifeHK = Detect.ReadLifeHK()
 		local entry = bgEntry
 		bgEntry = nil
+		Char().match = nil
 		-- No scoreboard came: the counter still says how many HKs the match
-		-- gave, and that much is kept.
+		-- gave, the journal how many deaths it wrote, and that much is kept.
 		if entry and not entry.done and lifeHK and type(entry.lifeHK) == "number" and lifeHK > entry.lifeHK then
-			WriteMatch(entry, { hk = lifeHK - entry.lifeHK, kb = 0, deaths = 0, honor = 0 }, {}, lifeHK)
+			local guid, author, looked = Looked()
+			local _, run = MatchRuns(guid, looked or 0, author and author.head or 0)
+			WriteMatch(entry, { hk = lifeHK - entry.lifeHK, kb = 0, deaths = run and run.deaths or 0, honor = 0 }, {}, lifeHK)
 			ns.Count("detect.bgMatchFallback")
+		end
+		-- What the match wrote and nothing closed (a counter that could not
+		-- be read) is closed from the journal itself; a scoreboard that was
+		-- read had the whole match.
+		if entry and entry.done then
+			local _, author = Looked()
+			if author then Char().matchLook = author.head end
+		else
+			Detect.CloseLostMatches(false, entry)
 		end
 		if lifeHK then
 			lastHK = lifeHK
 			Char().lifeHK = lifeHK
 		end
 		ns.Count("detect.bgLeave")
+	end
+	if now and not inBattleground then
+		inBattleground = true
+		EnterMatch(Detect.ReadLifeHK() or lastHK, false)
+		recentKills, recentDeaths = {}, {}
+		ns.Count("detect.bgEnter")
 	end
 end
 

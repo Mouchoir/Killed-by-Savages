@@ -143,8 +143,10 @@ function Identity.UpdateRoster(force)
 	end
 	local count = Get(GetNumGuildMembers)
 	if type(count) ~= "number" or count <= 0 then
-		if not Identity.InGuild() then
+		if not Identity.InGuild() and (roster.count or 0) > 0 then
+			-- The guild was left: whoever shows its members is told.
 			roster.byCanon, roster.byTail, roster.count = {}, {}, 0
+			if ns.Fire then ns.Fire("RosterUpdated") end
 		end
 		return false
 	end
@@ -306,6 +308,48 @@ function Identity.Con(token, level)
 	return nil
 end
 
+-- The level of an enemy player as last seen, and how the game rated it:
+-- read on its target, mouseover, focus or nameplate as they show. When the
+-- recap of a death is read the killer is often no unit any more (a rogue
+-- back in stealth, a nameplate gone), and only this says its level.
+local SEEN_FOR = 300             -- seconds a level seen stays good to use
+local SEEN_CAP = 200             -- players kept
+local SEEN_AGAIN = 2             -- seconds before a player seen is read again
+local seen = {}                  -- guid -> { level, con, at }
+local seenCount = 0
+
+local function Remember(unit)
+	if type(unit) ~= "string" or Get(UnitIsPlayer, unit) ~= true then return end
+	local guid = PlainGuid(unit)
+	if not guid then return end
+	-- Seen a moment ago: nothing more to ask the client. Nameplates come
+	-- and go by the dozen in a fight.
+	local known = seen[guid]
+	if known and Util.Clock() - known.at < SEEN_AGAIN then return end
+	if me.enemyFaction == nil or Get(UnitFactionGroup, unit) ~= me.enemyFaction then return end
+	local level = Get(UnitLevel, unit)
+	if type(level) ~= "number" or level == 0 then return end
+	if not seen[guid] then
+		if seenCount >= SEEN_CAP then
+			local now = Util.Clock()
+			for key, entry in pairs(seen) do
+				if now - entry.at > SEEN_FOR then
+					seen[key] = nil
+					seenCount = seenCount - 1
+				end
+			end
+			if seenCount >= SEEN_CAP then
+				seen, seenCount = {}, 0
+			end
+		end
+		seenCount = seenCount + 1
+	end
+	seen[guid] = { level = level, con = Identity.Con(unit, level), at = Util.Clock() }
+end
+
+-- Called by Init on target, mouseover, focus and nameplate events.
+Identity.RememberUnit = Remember
+
 -- What the client tells about a player GUID we are allowed to read.
 function Identity.PlayerFacts(guid)
 	local facts = { kind = Util.GuidKind(guid) }
@@ -322,6 +366,13 @@ function Identity.PlayerFacts(guid)
 		facts.con = Identity.Con(token, facts.level)
 		facts.faction = Get(UnitFactionGroup, token)
 		facts.guild = Get(GetGuildInfo, token)
+	end
+	-- No unit to read now: the level seen a moment ago, when there is one.
+	local last = seen[guid]
+	if type(facts.level) ~= "number" or facts.level == 0 then
+		if last and Util.Clock() - last.at <= SEEN_FOR then
+			facts.level, facts.con, facts.levelSeen = last.level, last.con, true
+		end
 	end
 	return facts
 end

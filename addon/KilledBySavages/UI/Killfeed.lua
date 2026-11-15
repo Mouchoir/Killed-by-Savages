@@ -51,6 +51,7 @@ local SETUP_LATEST = 10          -- seconds after entering the world, at the lat
 local CONFIRM = 10               -- seconds between two looks at a tab that seems gone
 local PATIENCE = 6               -- looks that tell nothing clear, before the lines leave the tab
 local TRAIL_CAP = 8              -- looks kept in the saved data
+local MATCH_NEWS = 900           -- seconds after its end a match still gets a line
 
 local tab                        -- the feed's tab, once a line went to it
 local held = {}                  -- lines waiting for the chat windows
@@ -98,9 +99,9 @@ local function Window(index)
 end
 
 local function NameOf(index)
-	if not Util.Fn(GetChatWindowInfo) then return nil end
-	local ok, name = pcall(GetChatWindowInfo, index)
-	return ok and name or nil
+	local name = Util.Get(GetChatWindowInfo, index)
+	if type(name) ~= "string" or name == Util.SECRET then return nil end
+	return name
 end
 
 -- A value the client keeps to itself says neither yes nor no.
@@ -284,6 +285,9 @@ end
 local function Closed()
 	tab, doubt = nil, nil
 	held = {}
+	-- This character has no tab any more: ticked again on another one, the
+	-- feed must not turn itself off at this one's next login.
+	Used(nil)
 	Settings().killfeed = false
 	ns.Count("killfeed.closedByPlayer")
 	ns.Print(L.KILLFEED_CLOSED)
@@ -443,7 +447,7 @@ local function MatchLine(member, record)
 	if record.backfill or record.instanceID == 0 then return nil end
 	local zone = Theme.ZoneName(record.mapID)
 	local kills = Amount(record.hk or 0, L.KILLFEED_ONE_KILL, L.KILLFEED_N_KILLS)
-	if (record.kb or 0) == 0 and (record.deaths or 0) == 0 and (record.honor or 0) == 0 then
+	if ns.Records.NoScoreboard(record) then
 		return zone and L.KILLFEED_MATCH_LEFT:format(member, zone, kills) or L.KILLFEED_MATCH_LEFT_NOZONE:format(member, kills)
 	end
 	local blows = Amount(record.kb or 0, L.KILLFEED_ONE_BLOW, L.KILLFEED_N_BLOWS)
@@ -483,6 +487,9 @@ end
 local function Line(guid, seq, record)
 	if record.type ~= "K" and record.type ~= "D" and record.type ~= "M" then return nil end
 	if record.type ~= "M" and record.bucket == "b" then return nil end
+	-- A match closed long after it was played (at the member's next login)
+	-- is no news.
+	if record.type == "M" and type(record.t) == "number" and Util.Now() - record.t > MATCH_NEWS then return nil end
 	local info = Stats.AuthorInfo(guid)
 	local member = Coloured(info.name, info.class) .. Level(info.level)
 	if record.type == "M" then return Words(member, record) end

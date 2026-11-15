@@ -64,6 +64,11 @@ their kills with the rest of the guild, right inside the game.
 - **Guild ranks to give.** The guild master picks the rank a main needs
   once it runs the addon, and the rank of alts. The ranks it chooses then
   see, right on the board, who is still waiting for a promotion.
+- **Guild announcements.** Officers write a raid night or an event on the
+  board, with its date and the link of the Discord message, for the whole
+  guild or for some ranks, classes or roles. The members it is for get a
+  line in the chat, a count on the tab and a blinking minimap button until
+  they have looked at it or the event has passed.
 - **Syncs by itself.** Kills land on everyone's board as they happen, and
   members who were offline catch up from whoever is online. The board even
   tells you who still runs an old version, and when yours is one.
@@ -122,7 +127,11 @@ guilde présent, avec ou sans l'addon. Le tableau signale aussi qui n'a pas
 l'addon à jour, et vous prévient quand c'est le vôtre. Le maître de guilde
 peut indiquer le grade attendu d'un personnage principal et celui des
 rerolls : les grades qu'il choisit voient alors, sur le tableau, qui attend
-encore sa promotion. Aucun serveur, aucun
+encore sa promotion. Les officiers peuvent aussi y écrire les annonces de
+la guilde (soirée de raid, événement, avec sa date et le lien du message
+Discord), pour toute la guilde ou pour certains grades, classes ou rôles :
+les membres concernés sont prévenus jusqu'à ce qu'ils l'aient regardée ou
+que l'événement soit passé. Aucun serveur, aucun
 site : les données circulent entre membres par messages d'addon cachés.
 Interface en français et en anglais. Discord (nouvelles versions, rapports
 de bug, idées) : https://discord.gg/wqYecPR8yC

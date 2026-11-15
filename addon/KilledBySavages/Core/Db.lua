@@ -24,6 +24,7 @@ local DEFAULT_SETTINGS = {
 	window = {},
 	verbose = false,
 	updates = true,                       -- remind of a newer release: chat line, dialog on the board
+	news = true,                          -- tell of the guild's announcements: chat line, count on the tab, blinking minimap button
 	-- updateSkip: the one release not to remind of, a version, set from the dialog
 	-- main: the GUID of the character its player calls its main, set in the Me tab
 }
@@ -64,6 +65,8 @@ function Db.Init()
 	db.authors = db.authors or {}         -- every journal held, own ones included
 	db.pending = db.pending or {}         -- HKs not matched yet (a /reload may interrupt)
 	db.rules = db.rules or {}             -- the rule on ranks of each guild, by guild name (see Ranks)
+	db.news = type(db.news) == "table" and db.news or {}                 -- the announcements of each guild, by guild name (see News)
+	db.newsRules = type(db.newsRules) == "table" and db.newsRules or {}  -- who may publish them, by guild name
 	db.errors = db.errors or {}
 	db.counters = db.counters or {}
 	db.debug = db.debug or {}

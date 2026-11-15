@@ -305,7 +305,11 @@ function ListView.New(parent, columns, options)
 	end
 
 	function view:SetData(list)
-		self.data = list or {}
+		-- A copy: the list is sorted here, by the column the player chose,
+		-- and the caller's own (a ranking the stats keep) must stay as it is.
+		local data = {}
+		for index, item in ipairs(list or {}) do data[index] = item end
+		self.data = data
 		self:Refresh()
 	end
 

@@ -529,6 +529,37 @@ local function TabFrame(key)
 	return tabFrame
 end
 
+-- A count on the button of a tab that has something waiting (the
+-- announcements not looked at yet): white on red, at its top right corner.
+local function RefreshBadges()
+	if not frame then return end
+	for key, button in pairs(frame.tabButtons) do
+		local definition = UI.tabs[key]
+		local count = definition.Badge and definition.Badge() or 0
+		if count > 0 then
+			local badge = button.badge
+			if not badge then
+				badge = CreateFrame("Frame", nil, button, "BackdropTemplate")
+				badge:SetSize(20, 16)
+				badge:SetPoint("TOPRIGHT", 6, 6)
+				badge:SetFrameLevel(button:GetFrameLevel() + 5)
+				Theme.Panel(badge, 8, 2, { 0.72, 0.13, 0.10, 1 }, { 1, 0.55, 0.42, 1 })
+				badge.text = badge:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+				badge.text:SetPoint("CENTER", 0, 0)
+				badge.text:SetTextColor(1, 1, 1)
+				button.badge = badge
+			end
+			badge.count = count
+			badge.text:SetText(count > 9 and "9+" or tostring(count))
+			badge:Show()
+		elseif button.badge then
+			button.badge.count = 0
+			button.badge:Hide()
+		end
+	end
+end
+UI.RefreshBadges = RefreshBadges
+
 local function RefreshBand()
 	local guild = Stats.Guild(state.period, state.bucket)
 	frame.band.number:SetText(Theme.Number(guild.distinct))
@@ -557,16 +588,19 @@ function UI.Refresh()
 	if tabFrame and definition then
 		Util.Guard("tab-refresh:" .. state.tab, definition.Refresh, tabFrame, state.period, state.bucket)
 	end
+	Util.Guard("badges", RefreshBadges)
 	-- The dialog about a newer release leaves when the player no longer
 	-- wants to hear of it: the Options tab's box, unticked while it is up.
 	local dialog = frame.updateDialog
 	if dialog and dialog:IsShown() and not ns.Sync.Reminder() then dialog:Hide() end
 end
 
-function UI.SelectTab(key)
+-- passing: for this time only, the tab the board opens on next stays the
+-- one the player chose.
+function UI.SelectTab(key, passing)
 	if not UI.tabs[key] then return end
 	state.tab = key
-	Settings().tab = key
+	if not passing then Settings().tab = key end
 	if not frame then return end
 	for tabKey, button in pairs(frame.tabButtons) do
 		button:SetSelected(tabKey == key)
@@ -606,7 +640,12 @@ function UI.Show()
 	Util.Guard("roster", ns.Identity.RequestRoster)
 	frame:Show()
 	frame:Raise()
-	UI.SelectTab(state.tab)
+	-- An announcement waits: the board opens on it.
+	if ns.News and UI.tabs.news and #ns.News.Unseen() > 0 then
+		UI.SelectTab("news", true)
+	else
+		UI.SelectTab(state.tab)
+	end
 	Util.Guard("update-dialog", ShowUpdateDialog)
 end
 
@@ -666,6 +705,12 @@ end
 ns.Hook("StatsChanged", QueueRefresh)
 ns.Hook("RosterUpdated", QueueRefresh)
 ns.Hook("SettingsChanged", QueueRefresh)
+-- An announcement came, went or was looked at: the count on its tab at
+-- once, the rest with the next refresh.
+ns.Hook("NewsChanged", function()
+	if frame and frame:IsShown() then Util.Guard("badges", RefreshBadges) end
+	QueueRefresh()
+end)
 ns.Hook("SyncChanged", FooterNow)
 ns.Hook("PeerSeen", OutdatedNow)
 ns.Hook("PresenceChanged", OutdatedNow)

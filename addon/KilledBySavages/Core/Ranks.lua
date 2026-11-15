@@ -76,6 +76,12 @@ local function Holds(part)
 	return name == nil or Short(name) == part.name
 end
 
+-- For the other rule a first rank sets (who may publish announcements).
+Ranks.Short, Ranks.Holds = Short, Holds
+function Ranks.Part(position)
+	return { index = position, name = Short(NameAt(position)) }
+end
+
 -- The rule in force. Nothing when the guild has none; nothing and
 -- "renamed" when a rank it names no longer carries that name.
 function Ranks.Rule()
