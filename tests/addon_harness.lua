@@ -694,6 +694,22 @@ advance(120)
 check("and the next holder served the page", Held(Gc, A) == aHead, Held(Gc, A))
 check("no further whisper went to the departed member", Gc.counter("sync.notFoundHidden") == 1)
 
+-- The answer can follow a whisper the send call did not call a success:
+-- it is still ours to hide.
+Gc.state.whisperError = true
+Gc.ns.Sync.Tell("Z", "probe", "Bryn Halloway", 1)
+advance(3)
+Gc.state.whisperError = nil
+check("a whisper the send call refused still has its answer hidden", Gc.counter("sync.notFoundHidden") == 2
+	and not Gc.sawSystem("Bryn Halloway"), Gc.counter("sync.notFoundHidden"))
+-- A line about a name the addon never whispered is another addon's: it stays
+-- in the chat, and /kbs debug notes it once, with no whisper of ours before it.
+Gc.system(Mock.NOT_PLAYING:format("Edda Morrow"))
+local shownTrail = Gc.ns.db.debug.notFoundShown
+check("a line about a whisper of another addon stays in the chat, noted once", Gc.sawSystem("Edda Morrow")
+	and Gc.counter("sync.notFoundShown") == 1 and type(shownTrail) == "table" and #shownTrail == 1
+	and shownTrail[1].sinceOurs == nil, Gc.counter("sync.notFoundShown"))
+
 --------------------------------------------------------------------------------
 section("Stats: characters, players, guild, hunting board, feed")
 --------------------------------------------------------------------------------
@@ -1563,19 +1579,21 @@ KillZaljin(A)
 MateKill(A, B)
 check("off, neither my kills nor a guildmate's write anything in the chat", not ChatSince(A, chatMark, "Zaljin Darkspear") and FeedWindow(A) == nil)
 
--- Ticked with no tab of that name: the lines go to the main chat, and a line
--- there says how to make the tab, once, naming the General tab and its menu
--- entry in the client's words. The addon opens no chat window: run from an
--- addon, the game's chat window code taints the chat edit box.
-local howTo = A.ns.L.KILLFEED_MAKE_TAB:format(A.ns.L.KILLFEED_TAB, "General", "New Window", A.ns.L.KILLFEED_TAB)
+-- Ticked with no tab of that name: the lines are not shown anywhere, and a
+-- line in the main chat says how to make the tab, once, naming the button
+-- of the Options tab, the General tab and its menu entry in the client's
+-- words. The addon opens no chat window: run from an addon, the game's chat
+-- window code taints the chat edit box.
+local howTo = A.ns.L.KILLFEED_MAKE_TAB:format(A.ns.L.KILLFEED_TAB,
+	A.ns.L.OPTIONS_KILLFEED_CREATE:format(A.ns.L.KILLFEED_TAB), "General", "New Window", A.ns.L.KILLFEED_TAB)
 local windowsBefore = count(A.windows)
 chatMark = #A.chat
 Tick(A, true)
 KillZaljin(A)
 KillZaljin(A)
-check("ticked with no Kills tab, the lines go to the main chat, told once how to make the tab, and no window opens",
+check("ticked with no Kills tab, the lines are not shown, told once how to make the tab, and no window opens",
 	A.db().settings.killfeed == true and FeedWindow(A) == nil and count(A.windows) == windowsBefore
-	and ChatSince(A, chatMark, A.ns.L.KILLFEED_ON_MAIN) and CountSince(A, chatMark, "Zaljin Darkspear") == 2
+	and not ChatSince(A, chatMark, A.ns.L.KILLFEED_ON_MAIN) and CountSince(A, chatMark, "Zaljin Darkspear") == 0
 	and CountSince(A, chatMark, howTo) == 1, CountSince(A, chatMark, howTo))
 
 -- The player makes the tab: the lines land there from the next one on.
@@ -1749,13 +1767,13 @@ check("at the next login the lines find the tab again, and no tab is opened", Fe
 	and #feedTab.lines == before + 1)
 
 -- The option is account-wide, chat tabs belong to each character: one
--- without the tab gets the lines in the main chat, told once how to make it.
+-- without the tab shows no line, and is told once how to make it.
 Relog(A, function() A.windows = {} end)
 chatMark = #A.chat
 KillZaljin(A)
 KillZaljin(A)
-check("a character without the tab gets the lines in the main chat, told once how to make the tab",
-	FeedWindow(A) == nil and CountSince(A, chatMark, "Zaljin Darkspear") == 2 and CountSince(A, chatMark, howTo) == 1)
+check("a character without the tab shows no line, told once how to make the tab",
+	FeedWindow(A) == nil and CountSince(A, chatMark, "Zaljin Darkspear") == 0 and CountSince(A, chatMark, howTo) == 1)
 
 -- The player makes the tab, then closes it. One look at a closed tab
 -- settles nothing: the line waits. What comes of it (the feed turns off
@@ -1773,15 +1791,15 @@ check("a tab seen closed once turns nothing off: the line waits", A.db().setting
 	and not ChatSince(A, chatMark, A.ns.L.KILLFEED_CLOSED) and not ChatSince(A, chatMark, "Zaljin Darkspear")
 	and #feedTab.lines == before)
 
--- Ticked again with the tab still closed: the main chat, with how to make
--- the tab, for the line that waited and for the next one; unticked, no
--- line goes anywhere.
+-- Ticked again with the tab still closed: how to make the tab, and neither
+-- the line that waited nor the next one shown; unticked, no line goes
+-- anywhere.
 chatMark = #A.chat
 Tick(A, true)
 KillZaljin(A)
-check("ticked again with no tab, the line that waited and the next go to the main chat with how to make it",
+check("ticked again with no tab, how to make it is said, and neither the line that waited nor the next is shown",
 	A.db().settings.killfeed == true and FeedWindow(A) == nil and ChatSince(A, chatMark, howTo)
-	and CountSince(A, chatMark, "Zaljin Darkspear") == 2, CountSince(A, chatMark, "Zaljin Darkspear"))
+	and CountSince(A, chatMark, "Zaljin Darkspear") == 0, CountSince(A, chatMark, "Zaljin Darkspear"))
 Tick(A, false)
 chatMark = #A.chat
 KillZaljin(A)
@@ -2082,8 +2100,9 @@ local function FeedTabDoubts()
 	check("chat setups that never stop do not make the look wait for ever", not FeedOn() and SaidClosed(from) == 1)
 
 	-- Renamed: in use under another name. Seen so twice, the tab is the
-	-- feed's no more: the feed stays on, its lines go to the main chat with
-	-- how to make a tab. The name itself stays out of the saved data.
+	-- feed's no more: the feed stays on, its lines are not shown, and the
+	-- player is told how to make a tab. The name itself stays out of the
+	-- saved data.
 	NewTab()
 	FeedLine()
 	from, lines, gones = #A.chat, Lines(), Counter("tabGone")
@@ -2091,8 +2110,8 @@ local function FeedTabDoubts()
 	FeedLine()
 	check("a renamed tab: the line waits for a second look", FeedOn() and InMain(from) == 0 and Lines() == lines)
 	advance(10)
-	check("renamed at the second look too: the feed stays on, its lines go to the main chat with how to make a tab",
-		FeedOn() and InMain(from) == 1 and CountSince(A, from, howTo) == 1 and SaidClosed(from) == 0 and Lines() == lines
+	check("renamed at the second look too: the feed stays on, its lines are not shown, how to make a tab is said",
+		FeedOn() and InMain(from) == 0 and CountSince(A, from, howTo) == 1 and SaidClosed(from) == 0 and Lines() == lines
 		and Counter("tabGone") == gones + 1)
 	check("the saved look says the name is another one, not which", Has(LastLooks(1), "gone, renamed")
 		and Has(LastLooks(1), "name other, 4 bytes") and not Has(table.concat(Looks(), " | "), "Raid"), LastLooks(1))
@@ -2149,7 +2168,7 @@ local function FeedTabDoubts()
 	check("renamed at one look, after a look that told nothing: the line still waits", FeedOn() and InMain(from) == 0
 		and Lines() == lines)
 	advance(10)
-	check("renamed at the next look too: the line goes to the main chat", FeedOn() and InMain(from) == 1 and Lines() == lines)
+	check("renamed at the next look too: the line is not shown", FeedOn() and InMain(from) == 0 and Lines() == lines)
 
 	-- Ticked with its tab there, then closed before any line: a tab is
 	-- expected all the same, and the next login turns the feed off.
@@ -2180,7 +2199,7 @@ local function FeedTabDoubts()
 	FeedLine()
 	A.chatInfoBroken = nil
 	check("a tab in use whose name the client will not give is not taken for the feed's", guildTab ~= nil
-		and #guildTab.lines == 0 and InMain(from) == 1)
+		and #guildTab.lines == 0 and InMain(from) == 0)
 	A.asPlayer(A.env.FCF_Close, guildTab.frame)
 
 	-- A line waiting on a tab in doubt goes to the main chat when the player
@@ -2238,6 +2257,64 @@ local function FeedTabDoubts()
 	FeedLine()
 	check("renamed while another tab carries the feed's name: the lines go to that one at once", second ~= nil and second ~= pane
 		and #second.lines == 1 and Counter("tabDoubt") == doubts and InMain(from) == 0)
+
+	-- The feed wants its tab and this character has none: 25 seconds after
+	-- login, and each time the board opens, the main chat says how to make
+	-- it. Not sooner, not with the tab there, not with the feed off or the
+	-- main chat chosen. The game runs the board's OnShow as it opens.
+	-- Each login builds the board anew, on its first opening.
+	local function OpenBoard()
+		if not A.env.KilledBySavagesFrame then A.slash("") end
+		local board = A.env.KilledBySavagesFrame
+		board.scripts.OnShow(board)
+	end
+	local function SaidHowTo(since) return CountSince(A, since, howTo) end
+	local reminded = Counter("reminded")
+	from = Relogin()
+	OpenBoard()
+	check("with the tab there, no reminder at login nor when the board opens", FeedOn() and SaidHowTo(from) == 0
+		and Counter("reminded") == reminded, Counter("reminded") - reminded)
+	-- A character that never had the tab, the feed on.
+	A.ns.Killfeed.Disable()
+	ClosePane()
+	A.asPlayer(A.env.FCF_Close, second.frame)
+	A.db().settings.killfeed, A.db().settings.killfeedTab = true, true
+	A.logout()
+	A.windows = {}
+	A.saved.characters[A.guid].feedTabUsed = nil
+	A.login()
+	from = #A.chat
+	advance(24)
+	local early = SaidHowTo(from)
+	advance(2)
+	check("no tab: 25 seconds after login, the main chat says how to make it, not sooner", early == 0
+		and SaidHowTo(from) == 1 and Counter("reminded") == reminded + 1, early .. " " .. SaidHowTo(from))
+	FeedLine()
+	check("and the line that finds no tab is not shown, nor the reminder said again", InMain(from) == 0
+		and SaidHowTo(from) == 1)
+	OpenBoard()
+	OpenBoard()
+	check("each opening of the board says it again", SaidHowTo(from) == 3 and Counter("reminded") == reminded + 3)
+	TickTab(A, false)
+	from = #A.chat
+	OpenBoard()
+	FeedLine()
+	check("with the main chat chosen, no reminder, and the lines go there", SaidHowTo(from) == 0 and InMain(from) == 1)
+	TickTab(A, true)
+	A.ns.Killfeed.Disable()
+	from = #A.chat
+	OpenBoard()
+	check("with the feed off, no reminder", SaidHowTo(from) == 0)
+	-- The player makes the tab: no reminder any more, the lines land there.
+	A.db().settings.killfeed = true
+	A.asPlayer(A.env.FCF_OpenNewWindow, L.KILLFEED_TAB, true)
+	pane = FeedWindow(A)
+	second = pane
+	from = #A.chat
+	OpenBoard()
+	FeedLine()
+	check("once the player made the tab, no reminder, and the lines land in it", SaidHowTo(from) == 0 and InMain(from) == 0
+		and Lines() == 1, Lines())
 
 	-- The feed is left as it was found: off, its tabs closed by the player.
 	A.ns.Killfeed.Disable()

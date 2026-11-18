@@ -7,9 +7,11 @@ local _, ns = ...
 -- kills on that enemy against the enemy's on the member, in the world,
 -- from the member's own journal.
 --
--- Off by default. Ticked, the lines go to the chat tab named after the feed
--- when the player has one, else to the main chat; the second option sends
--- them to the main chat anyway. Closing that tab turns the feed off.
+-- Off by default. Ticked, the lines go to the chat tab named after the feed;
+-- while the character has no such tab they are not shown, and the player is
+-- told how to make it (25 seconds after login, each time the board opens,
+-- and at the first line that finds no tab). The second option sends them to
+-- the main chat instead. Closing that tab turns the feed off.
 --
 -- The addon never opens, closes or selects a chat window. Run from an
 -- addon, Blizzard's chat window code (FCF_OpenNewWindow, FCF_Close,
@@ -52,6 +54,7 @@ local CONFIRM = 10               -- seconds between two looks at a tab that seem
 local PATIENCE = 6               -- looks that tell nothing clear, before the lines leave the tab
 local TRAIL_CAP = 8              -- looks kept in the saved data
 local MATCH_NEWS = 900           -- seconds after its end a match still gets a line
+local REMIND_DELAY = 25          -- seconds after login, the missing tab is recalled
 
 local tab                        -- the feed's tab, once a line went to it
 local held = {}                  -- lines waiting for the chat windows
@@ -254,15 +257,19 @@ end
 -- Where a line goes
 --------------------------------------------------------------------------------
 
--- How to make the tab, in the client's own words: the General tab's name and
--- the entry of its menu that opens a new window. Once per session.
+-- The tab is missing and its lines are not shown: how to make it, by the
+-- button of the Options tab or by hand, in the client's own words (the
+-- General tab's name and the entry of its menu that opens a new window).
+-- Said once per session when a line finds no tab; forced at login and each
+-- time the board opens.
 local function Hint(force)
 	if hinted and not force then return end
 	hinted = true
 	local general = NameOf(1)
 	if type(general) ~= "string" or general == "" then general = L.KILLFEED_GENERAL end
 	local entry = type(NEW_CHAT_WINDOW) == "string" and NEW_CHAT_WINDOW or L.KILLFEED_NEW_WINDOW
-	ns.Print(L.KILLFEED_MAKE_TAB:format(L.KILLFEED_TAB, general, entry, L.KILLFEED_TAB))
+	ns.Print(L.KILLFEED_MAKE_TAB:format(L.KILLFEED_TAB, L.OPTIONS_KILLFEED_CREATE:format(L.KILLFEED_TAB),
+		general, entry, L.KILLFEED_TAB))
 end
 
 local function Hold(line)
@@ -343,8 +350,9 @@ Settle = function(which)
 	Util.After(CONFIRM, "killfeed-settle", Settle, doubt)
 end
 
--- A line to the feed's tab, or to the main chat when the player has none or
--- chose it.
+-- A line to the feed's tab, or to the main chat when the player chose it.
+-- The tab wanted and missing, the line is not shown: the player is told how
+-- to make the tab instead (once per session from here).
 Deliver = function(line)
 	if InTab() then
 		if doubt then
@@ -362,7 +370,9 @@ Deliver = function(line)
 			Hold(line)
 			return
 		end
+		ns.Count("killfeed.noTab")
 		Hint()
+		return
 	end
 	ns.Print(line)
 end
@@ -537,9 +547,10 @@ function Killfeed.Enable()
 	if InTab() then Used(tab and true or nil) end
 	if tab then
 		tab:AddMessage(L.KILLFEED_ON)
+	elseif InTab() then
+		Hint(true)
 	else
 		ns.Print(L.KILLFEED_ON_MAIN)
-		if InTab() then Hint(true) end
 	end
 	Flush()
 	return tab
@@ -548,6 +559,16 @@ end
 -- The feed is on, wants its tab, and this character has none.
 function Killfeed.NeedsTab()
 	return Settings().killfeed == true and InTab() and FindTab() == nil
+end
+
+-- At login and each time the board opens: the tab is wanted and missing,
+-- so the player is told again. Not while a tab the lines went to is being
+-- looked at again: it may well be there.
+function Killfeed.Remind()
+	if not ns.db or not setupDone or doubt or not Killfeed.NeedsTab() then return false end
+	ns.Count("killfeed.reminded")
+	Hint(true)
+	return true
 end
 
 -- Asked for by the player: the addon opens the tab, then reloads the
@@ -688,6 +709,7 @@ ns.Hook("EnteringWorld", function()
 	if entered then return end
 	entered = true
 	Util.After(chatReady and SETUP_DELAY or SETUP_LATEST, "killfeed", Setup)
+	Util.After(REMIND_DELAY, "killfeed-remind", Killfeed.Remind)
 end)
 
 ns.Hook("Debug", function()

@@ -989,6 +989,12 @@ function Mock.NewClient(spec)
 				end
 				if channel == "GUILD" and not st.guild then return RESULT.NotInGuild end
 				if (channel == "PARTY" or channel == "RAID") and not st.group then return RESULT.NotInGroup end
+				-- A whisper the send call does not call a success, while the
+				-- server still answers that nobody by that name is playing.
+				if channel == "WHISPER" and st.whisperError then
+					deliver(client, prefix, text, channel, target)
+					return RESULT.GeneralError
+				end
 				if channel == "INSTANCE_CHAT" and st.bucket ~= "bg" then return RESULT.NotInGroup end
 				deliver(client, prefix, text, channel, target)
 				return RESULT.Success

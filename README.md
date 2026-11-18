@@ -93,10 +93,11 @@ client did not read gets none. A battleground hides whom a member kills,
 so its kills and deaths give no line: the match gives one when it ends,
 from its scoreboard, "X (38) finished a match in Arathi Basin: 12 kills, 3
 killing blows, 4 deaths".
-The lines go to a chat tab named "Kills" when there is one, else to the
-main chat, with a line once per session saying how to make the tab; the
-second box, "In the chat tab named Kills", unticked, sends them to the main
-chat anyway. The tab is the player's to make (right-click the General tab,
+The lines go to a chat tab named "Kills". While the character has no such
+tab they are not shown, and a line in the main chat says how to make it:
+25 seconds after login, each time the board opens, and at the first line
+that finds no tab. The second box, "In the chat tab named Kills", unticked,
+sends the lines to the main chat instead. The tab is the player's to make (right-click the General tab,
 "New Window", name it Kills), or the Options tab makes it: while the feed
 wants a tab that is not there, a button, "Create the Kills tab (reloads the
 interface)", opens it and reloads the interface in the same breath. Closing

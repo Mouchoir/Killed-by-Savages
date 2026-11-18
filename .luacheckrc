@@ -17,7 +17,7 @@ read_globals = {
 	"ScrollUtil", "CreateScrollBoxListLinearView", "CreateDataProvider", "ScrollBoxConstants",
 	"PanelTemplates_SelectTab", "PanelTemplates_DeselectTab", "PanelTemplates_SetNumTabs", "PanelTemplates_TabResize",
 	"Settings", "STANDARD_TEXT_FONT", "GameFontNormalHuge", "GameFontNormalLarge", "LOCALIZED_CLASS_NAMES_MALE",
-	"ChatFrame_AddMessageEventFilter", "ERR_CHAT_PLAYER_NOT_FOUND_S",
+	"ChatFrame_AddMessageEventFilter", "ChatFrameUtil", "ERR_CHAT_PLAYER_NOT_FOUND_S",
 	"FCF_OpenNewWindow", "FCF_Close", "FCF_IsChatWindowIndexActive", "FCFDock_GetSelectedWindow",
 	"FCFDock_SelectWindow", "GENERAL_CHAT_DOCK", "GetChatWindowInfo", "NUM_CHAT_WINDOWS", "Constants", "C_UI", "ReloadUI",
 	"HideUIPanel", "SettingsPanel",

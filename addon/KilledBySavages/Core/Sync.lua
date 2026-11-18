@@ -215,13 +215,15 @@ local function Pump()
 		Util.After(0.1, "pump", Pump)
 		return
 	end
+	-- Marked before the send, whatever it answers: the server's "not playing"
+	-- line can follow a whisper the send call did not call a success.
+	if item.channel == "WHISPER" then whispered[Identity.Canon(item.target)] = Now() end
 	local result = Sync.SendRaw(item.text, item.channel, item.target)
 	ns.Count("sync.out." .. item.kind .. "." .. result)
 	if result == "AddonMessageThrottle" or result == "ChannelThrottle" then
 		Util.After(THROTTLE_WAIT, "pump", Pump)
 		return
 	end
-	if item.channel == "WHISPER" and result == "Success" then whispered[Identity.Canon(item.target)] = Now() end
 	table.remove(queue, 1)
 	if item.onSent then item.onSent(result) end
 	Util.After(SEND_GAP, "pump", Pump)
@@ -814,19 +816,50 @@ end
 -- A whisper to someone who is not playing gets a system line in the chat
 -- ("No player named '%s' is currently playing."). When the whisper was
 -- ours, the line is ours to hide, and it says the member is gone.
+-- A line left in the chat is noted in /kbs debug with how long before it we
+-- had whispered that name, if ever: it tells a whisper of another addon
+-- from one of ours that the filter missed.
+local NOT_FOUND_TRAIL = 10
+local lastShownClock
+local function NoteShown(at)
+	if not ns.db then return end
+	ns.Count("sync.notFoundShown")
+	local trail = ns.db.debug.notFoundShown
+	if type(trail) ~= "table" then
+		trail = {}
+		ns.db.debug.notFoundShown = trail
+	end
+	trail[#trail + 1] = { at = Now(), sinceOurs = at and (Now() - at) or nil }
+	while #trail > NOT_FOUND_TRAIL do table.remove(trail, 1) end
+end
+
 local filterInstalled = false
 local function InstallNotFoundFilter()
-	if filterInstalled or not Util.Fn(ChatFrame_AddMessageEventFilter) then return end
+	-- ChatFrameUtil is the current home of the chat filters; the old global
+	-- lives in a deprecation file the client may not load.
+	local add = ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter
+	if not Util.Fn(add) then add = ChatFrame_AddMessageEventFilter end
+	if filterInstalled or not Util.Fn(add) then return end
 	local template = ERR_CHAT_PLAYER_NOT_FOUND_S
 	if type(template) ~= "string" or not template:find("%s", 1, true) then return end
 	local escaped = (template:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0"))
 	local pattern = "^" .. (escaped:gsub("%%%%s", "(.+)")) .. "$"
 	filterInstalled = true
-	ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", function(_, _, message)
+	add("CHAT_MSG_SYSTEM", function(_, _, message)
 		local name = type(message) == "string" and message:match(pattern) or nil
-		local canon = name and Identity.Canon(name) or nil
+		if not name then return false end
+		local canon = Identity.Canon(name)
 		local at = canon and whispered[canon] or nil
-		if not at or Now() - at > NOT_FOUND_WINDOW then return false end
+		if not at or Now() - at > NOT_FOUND_WINDOW then
+			-- Each chat window runs the filter on the same line within one
+			-- frame: one note per line, not per window.
+			local clock = Util.Clock()
+			if clock ~= lastShownClock then
+				lastShownClock = clock
+				Util.Guard("sync-notfound", NoteShown, at)
+			end
+			return false
+		end
 		ns.Count("sync.notFoundHidden")
 		Util.Guard("sync-gone", HolderGone, canon)
 		return true

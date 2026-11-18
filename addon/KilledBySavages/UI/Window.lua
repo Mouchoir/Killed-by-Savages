@@ -422,6 +422,8 @@ local function BuildShell()
 		if Util.Fn(PlaySound) and type(SOUNDKIT) == "table" and SOUNDKIT.IG_CHARACTER_INFO_OPEN then
 			pcall(PlaySound, SOUNDKIT.IG_CHARACTER_INFO_OPEN)
 		end
+		-- The feed wants its tab and this character has none: said again.
+		if ns.Killfeed then Util.Guard("killfeed-remind", ns.Killfeed.Remind) end
 	end)
 	frame:SetScript("OnHide", function()
 		if Util.Fn(PlaySound) and type(SOUNDKIT) == "table" and SOUNDKIT.IG_CHARACTER_INFO_CLOSE then
